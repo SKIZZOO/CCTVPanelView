@@ -575,7 +575,7 @@ class MainWindow(QMainWindow):
         top_bar.setFixedHeight(64)
         top_bar.installEventFilter(self)
         top_layout = QHBoxLayout(top_bar)
-        top_layout.setContentsMargins(14, 10, 14, 10)
+        top_layout.setContentsMargins(12, 8, 10, 8)
         top_layout.setSpacing(8)
 
         def create_capsule_divider():
@@ -812,6 +812,31 @@ class MainWindow(QMainWindow):
         self.btn_fullscreen.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_fullscreen.clicked.connect(self.toggle_fullscreen)
         tools_capsule_box.addWidget(self.btn_fullscreen)
+
+        # Keep frequent commands visible; secondary controls share an accessible menu.
+        self._overflow_buttons = [
+            (self.btn_intercom_panel, "Intercom"),
+            (self.btn_global_color_night, "Night color"),
+            (self.btn_sound_alarm, "Audible alarms"),
+            (self.btn_scanner, "Discover cameras"),
+            (self.btn_retention, "Storage retention"),
+            (self.btn_phone, "Mobile access"),
+        ]
+        for button, title in self._overflow_buttons:
+            tools_capsule_box.removeWidget(button)
+            button.hide()
+            button.setAccessibleName(title)
+        self.btn_more_tools = QPushButton(" More", self.capsule_tools)
+        self.btn_more_tools.setAccessibleName("More workstation tools")
+        self.btn_more_tools.setToolTip("More workstation tools")
+        self.btn_more_tools.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.tools_menu = QMenu(self.btn_more_tools)
+        self.tools_menu.aboutToShow.connect(self._populate_tools_menu)
+        self.btn_more_tools.setMenu(self.tools_menu)
+        tools_capsule_box.insertWidget(tools_capsule_box.indexOf(self.btn_settings), self.btn_more_tools)
+        for button in top_bar.findChildren(QPushButton):
+            if not button.accessibleName():
+                button.setAccessibleName(button.toolTip() or button.text().strip())
 
         top_layout.addWidget(self.capsule_tools)
 
@@ -3083,81 +3108,48 @@ class MainWindow(QMainWindow):
             self._reposition_intercom_flyout()
         self._adjust_responsive_ui(event.size().width())
 
+    def _populate_tools_menu(self):
+        self.tools_menu.clear()
+        buttons = list(self._overflow_buttons)
+        for button, title in [(self.btn_snap_all, "Snapshot"), (self.btn_ptz_panel, "PTZ controls"),
+                              (self.btn_global_quality_btn, "Video quality"), (self.btn_cpu_monitor, "Performance")]:
+            if button.isHidden():
+                buttons.append((button, title))
+        for button, title in buttons:
+            action = self.tools_menu.addAction(button.icon(), title)
+            action.setEnabled(button.isEnabled())
+            action.setToolTip(button.toolTip())
+            if button.isCheckable():
+                action.setCheckable(True)
+                action.setChecked(button.isChecked())
+            action.triggered.connect(lambda checked=False, target=button: target.click())
+
     def _adjust_responsive_ui(self, win_width: int):
-        """
-        Dynamically adapts top-bar action titles based on available window width.
-        Smoothly collapses button text to crisp vector icons when space is constrained.
-        """
-        is_wide = win_width >= 1550
-        is_balanced = 1260 <= win_width < 1550
-        is_compact = win_width < 1260
-
-        target_mode = "wide" if is_wide else ("balanced" if is_balanced else "compact")
-        if getattr(self, "_current_responsive_mode", None) == target_mode:
+        if not hasattr(self, "btn_more_tools"):
             return
-        self._current_responsive_mode = target_mode
-
-        # Sidebar button
-        if hasattr(self, "btn_toggle_sidebar"):
-            self.btn_toggle_sidebar.setText(" Sidebar" if (is_wide or is_balanced) else "")
-
-        # Brand text
-        if hasattr(self, "lbl_brand_text"):
-            if win_width < 1050:
-                self.lbl_brand_text.setText('<span style="font-family: \'Segoe UI Variable Display\', \'Segoe UI\', sans-serif; font-size: 13px; font-weight: 750; color: #f8fafc;">CCTV</span>')
-            else:
-                self.lbl_brand_text.setText('<span style="font-family: \'Segoe UI Variable Display\', \'Segoe UI\', sans-serif; font-size: 14px; font-weight: 750; letter-spacing: 0.8px; color: #f8fafc;">CCTV</span> <span style="font-family: \'Segoe UI Variable Display\', \'Segoe UI\', sans-serif; font-size: 14px; font-weight: 350; letter-spacing: 0.8px; color: #38bdf8;">PanelView</span> <span style="font-size:9px; font-weight:700; color:#38bdf8; background:rgba(56,189,248,0.18); border:1px solid #38bdf8; padding:1px 6px; border-radius:8px; vertical-align:middle;">LIVE</span>')
-
-        # Layout buttons: Sleek Apple-style segmented icon controls with tooltips
-        if hasattr(self, "layout_btns"):
-            for k in ["1x1", "2x2", "3x3"]:
-                if k in self.layout_btns:
-                    self.layout_btns[k].setText("")
-            if "custom" in self.layout_btns:
-                self.layout_btns["custom"].setText("")
-        if hasattr(self, "btn_dual_hero"):
-            self.btn_dual_hero.setText("")
-
-        # Camera & Workstation Tools: Clean vector icons with labels for primary status indicators
-        if hasattr(self, "btn_master_alerts"):
-            self._update_master_alerts_btn_style()
-        if hasattr(self, "btn_trigger_settings"):
-            self.btn_trigger_settings.setText(" Feed" if (is_wide or is_balanced) else "")
-        if hasattr(self, "btn_global_quality_btn"):
-            self._update_global_quality_btn_style()
-        if hasattr(self, "btn_snap_all"):
-            self.btn_snap_all.setText("")
-        if hasattr(self, "btn_ptz_panel"):
-            self.btn_ptz_panel.setText("")
-        if hasattr(self, "btn_intercom_panel"):
-            self.btn_intercom_panel.setText("")
-        if hasattr(self, "btn_global_color_night"):
-            self.btn_global_color_night.setText("")
-        if hasattr(self, "btn_sound_alarm"):
-            on_txt = " Siren: ON" if getattr(self, "sound_alarms_enabled", True) else " Siren: OFF"
-            self.btn_sound_alarm.setText(on_txt if (is_wide or is_balanced) else "")
-
-        # System & Workstation
-        if hasattr(self, "btn_scanner"):
-            self.btn_scanner.setText("")
-        if hasattr(self, "btn_retention"):
-            self.btn_retention.setText("")
-        if hasattr(self, "btn_phone"):
-            self.btn_phone.setText("")
-        if hasattr(self, "btn_player"):
-            self.btn_player.setText(" Recordings" if (is_wide or is_balanced) else "")
-        if hasattr(self, "btn_settings"):
-            self.btn_settings.setText("")
-
-        self._update_cpu_monitor()
-
-        if hasattr(self, "top_bar") and self.top_bar and self.top_bar.layout():
-            if hasattr(self, "capsule_brand"):
-                self.capsule_brand.updateGeometry()
-            if hasattr(self, "capsule_tools"):
-                self.capsule_tools.updateGeometry()
-            self.top_bar.layout().invalidate()
-            self.top_bar.layout().activate()
+        mode = "wide" if win_width >= 1500 else ("balanced" if win_width >= 1200 else "compact")
+        # Include the brand breakpoint in the cache key, even within compact mode.
+        key = (mode, win_width < 1050)
+        if getattr(self, "_current_responsive_mode", None) == key:
+            return
+        self._current_responsive_mode = key
+        labels = mode == "wide"
+        self.lbl_brand_text.setText("CCTV" if win_width < 1050 else "CCTV <span style='color:#38bdf8'>PanelView</span>")
+        self.lbl_brand_text.setStyleSheet("background:transparent; border:none; font-size:14px; font-weight:600;")
+        self.btn_toggle_sidebar.setText(" Sidebar" if labels else "")
+        for name, button in self.layout_btns.items():
+            button.setText(" " + ("Custom" if name == "custom" else name) if labels else "")
+        self.btn_dual_hero.setText(" Dual" if labels else "")
+        self.btn_trigger_settings.setText(" Events" if mode != "compact" else "")
+        self.btn_snap_all.setText(" Snapshot" if labels else "")
+        self.btn_ptz_panel.setText(" PTZ" if labels else "")
+        self.btn_player.setText(" Recordings" if mode != "compact" else "")
+        self.btn_more_tools.setText(" More")
+        for button in (self.btn_snap_all, self.btn_ptz_panel, self.btn_global_quality_btn, self.btn_cpu_monitor):
+            button.setVisible(mode != "compact")
+        self._update_master_alerts_btn_style()
+        self._update_global_quality_btn_style()
+        self.top_bar.layout().invalidate()
 
     def _on_alert_triggered_from_manager(self, alert_entry: dict):
         try:

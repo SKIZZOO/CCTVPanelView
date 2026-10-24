@@ -38,7 +38,10 @@ class AsyncVideoRecorder:
         self.on_status_callback = on_status_callback
         self.intro_meta = intro_meta
 
-        self._queue = queue.Queue(maxsize=60)
+        # Bound buffered pixel memory per recorder (~32 MiB for expected BGR frames).
+        # A fixed 60-frame queue otherwise retains ~1.4 GiB at 4K per camera.
+        frame_bytes = self.width * self.height * 3
+        self._queue = queue.Queue(maxsize=max(1, min(60, (32 * 1024 * 1024) // frame_bytes)))
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._writer: Optional[cv2.VideoWriter] = None

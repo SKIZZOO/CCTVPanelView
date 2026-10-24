@@ -363,13 +363,13 @@ QSplitter::handle:horizontal:hover {{
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
     border-top-left-radius: 14px;
     border-top-right-radius: 14px;
-    min-height: 74px;
-    max-height: 84px;
+    min-height: 64px;
+    max-height: 64px;
 }}
 QFrame.top-bar-capsule, #top_bar QFrame[class="top-bar-capsule"] {{
     background-color: rgba(15, 23, 42, 0.78);
     border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 18px;
+    border-radius: 10px;
 }}
 QFrame.top-bar-capsule:hover {{
     background-color: rgba(15, 23, 42, 0.90);
@@ -378,12 +378,15 @@ QFrame.top-bar-capsule:hover {{
 #top_bar QPushButton {{
     background-color: transparent;
     border: 1px solid transparent;
-    border-radius: 13px;
+    border-radius: 7px;
     color: #cbd5e1;
     font-size: 11px;
     font-weight: 600;
     padding: 3px 8px;
     min-height: 26px;
+}}
+#top_bar QPushButton:focus {{
+    border: 1px solid #38bdf8;
 }}
 #top_bar QPushButton:hover {{
     background-color: rgba(255, 255, 255, 0.12);
@@ -407,7 +410,7 @@ QFrame.top-bar-capsule:hover {{
 .grid-layout-btn, QPushButton[class="grid-layout-btn"] {{
     background-color: transparent;
     border: 1px solid transparent;
-    border-radius: 13px;
+    border-radius: 7px;
     color: #94a3b8;
     font-weight: 600;
     font-size: 11px;
