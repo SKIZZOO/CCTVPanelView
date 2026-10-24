@@ -28,6 +28,7 @@ class DeviceManager:
     and network scanning.
     """
     def __init__(self, config_file: Optional[str] = None):
+        self.last_save_error = ""
         if not config_file:
             self.config_file = get_config_path()
         elif not os.path.isabs(config_file):
@@ -97,6 +98,7 @@ class DeviceManager:
             self.save_config()
 
     def save_config(self):
+        self.last_save_error = ""
         temp_path = None
         try:
             folder = os.path.dirname(os.path.abspath(self.config_file))
@@ -110,8 +112,11 @@ class DeviceManager:
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(temp_path, self.config_file)
+            return True
         except Exception as e:
+            self.last_save_error = str(e)
             print(f"Failed to save config: {e}")
+            return False
         finally:
             if temp_path and os.path.exists(temp_path):
                 os.remove(temp_path)
@@ -127,8 +132,7 @@ class DeviceManager:
 
     def is_camera_configured(self, cam_or_id: Any) -> bool:
         """
-        Determines whether a camera is fully configured with valid security credentials.
-        Surveillance cameras strictly require an RTSP authentication password to connect.
+        Determines whether setup was completed and an RTSP stream is available.
         """
         if isinstance(cam_or_id, str):
             cam = self.get_camera_by_id(cam_or_id)
@@ -140,16 +144,13 @@ class DeviceManager:
         if not cam:
             return False
 
-        # A camera CANNOT connect or stream without an authentication password
-        pwd = str(cam.get("password", "")).strip()
-        if not pwd:
-            return False
-
         # If user explicitly marked configured: False, respect that
         if cam.get("configured") is False:
             return False
 
-        return True
+        # Some cameras allow anonymous RTSP. A password is not a setup requirement.
+        return any(isinstance(stream, dict) and str(stream.get("url", "")).startswith(("rtsp://", "rtsps://"))
+                   for stream in cam.get("streams", []))
 
     def get_all_streams(self) -> List[Dict[str, Any]]:
         """
@@ -186,15 +187,20 @@ class DeviceManager:
         if "id" not in camera_data or not camera_data["id"]:
             camera_data["id"] = f"cam_{uuid.uuid4().hex}"
         cameras.append(camera_data)
-        self.save_config()
+        if not self.save_config():
+            cameras.remove(camera_data)
+            return False
+        return True
 
     def update_camera(self, camera_id: str, updated_data: Dict[str, Any]):
         cameras = self.config.setdefault("cameras", [])
         for idx, cam in enumerate(cameras):
             if cam.get("id") == camera_id:
                 cameras[idx] = updated_data
-                self.save_config()
-                return True
+                if self.save_config():
+                    return True
+                cameras[idx] = cam
+                return False
         return False
 
     def update_stream_name(self, stream_id: str, new_name: str) -> bool:

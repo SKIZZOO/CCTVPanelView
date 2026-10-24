@@ -1476,7 +1476,7 @@ class SettingsDialog(QDialog):
         is_dual = cam.get("is_dual_lens", False)
         lens_tag = "Dual-Lens" if is_dual else "Single Lens"
         has_pwd = bool(str(cam.get("password", "")).strip())
-        is_cfg = bool(cam.get("configured", False)) and has_pwd
+        is_cfg = cam.get("configured") is not False and bool(cam.get("streams"))
         cfg_tag = "" if is_cfg else " [Needs Setup]"
         return f"{name}  •  {lens_tag}{cfg_tag}"
 
@@ -1485,7 +1485,7 @@ class SettingsDialog(QDialog):
             return
         is_dual = cam.get("is_dual_lens", False)
         has_pwd = bool(str(cam.get("password", "")).strip())
-        is_cfg = bool(cam.get("configured", False)) and has_pwd
+        is_cfg = cam.get("configured") is not False and bool(cam.get("streams"))
 
         if is_dual:
             self.badge_cam_lens.setText("Dual-Lens (2 Streams)")
@@ -1964,7 +1964,7 @@ class SettingsDialog(QDialog):
         cam["is_dual_lens"] = is_dual
         cam["lens1_path"] = path1
         cam["lens2_path"] = path2 if is_dual else ""
-        cam["configured"] = bool(pwd)
+        cam["configured"] = bool(ip and url1)
 
         streams = [
             {

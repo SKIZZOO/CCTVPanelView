@@ -1,5 +1,6 @@
 import os
 import socket
+import uuid
 from typing import Dict, Any, Optional
 
 from PyQt6.QtWidgets import (
@@ -771,7 +772,7 @@ class DeviceDialog(QDialog):
             return
 
         is_dual = self.chk_dual.isChecked()
-        cam_id = self.camera_data.get("id") or f"cam_{ip.replace('.', '_')}"
+        cam_id = self.camera_data.get("id") or f"cam_{uuid.uuid4().hex}"
 
         url1 = self.txt_stream1_url.text().strip()
         url2 = self.txt_stream2_url.text().strip() if is_dual else ""
@@ -834,6 +835,7 @@ class DeviceDialog(QDialog):
 
         self.result_data = {
             "id": cam_id,
+            "configured": True,
             "name": name,
             "model": self.cmb_preset.currentText(),
             "ip": ip,

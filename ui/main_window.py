@@ -2530,9 +2530,6 @@ class MainWindow(QMainWindow):
         if getattr(self, "_in_prompt_unconfigured", False):
             return False
 
-        if getattr(self, "_restoring_session", False):
-            return False
-
         if not stream_or_cam:
             return False
 
@@ -2560,10 +2557,14 @@ class MainWindow(QMainWindow):
 
         if not cam:
             url = stream_or_cam.get("url", "")
-            return bool(url and "@" in url)
+            return bool(url and url.startswith(("rtsp://", "rtsps://")))
 
         if hasattr(self.device_manager, "is_camera_configured") and self.device_manager.is_camera_configured(cam):
             return True
+
+        # Restore configured streams, but never open setup modals during startup.
+        if getattr(self, "_restoring_session", False):
+            return False
 
         self._in_prompt_unconfigured = True
         try:
@@ -2590,6 +2591,9 @@ class MainWindow(QMainWindow):
                         s_info["camera_id"] = refreshed_cam.get("id")
                         s_info["camera_name"] = refreshed_cam.get("name")
                         s_info["camera_ip"] = refreshed_cam.get("ip")
+
+                        # Setup has completed. The subsequent assignment must pass the guard.
+                        self._in_prompt_unconfigured = False
 
                         if target_tile_idx is not None:
                             self.start_stream_on_tile(target_tile_idx, s_info)
@@ -4383,8 +4387,10 @@ class MainWindow(QMainWindow):
             return
 
         # 1. Update device manager inventory and save configuration
-        self.device_manager.update_camera(cid, cam_data)
-        self.device_manager.save_config()
+        if not self.device_manager.update_camera(cid, cam_data):
+            QMessageBox.critical(self, "Camera could not be saved",
+                                 "The camera update was not saved. " + self.device_manager.last_save_error)
+            return
 
         # 2. Refresh sidebar camera tree and signal monitor
         self._populate_camera_tree()
@@ -4489,7 +4495,10 @@ class MainWindow(QMainWindow):
         dlg = DeviceDialog(parent=self)
         if dlg.exec():
             new_cam = dlg.result_data
-            self.device_manager.add_camera(new_cam)
+            if not self.device_manager.add_camera(new_cam):
+                QMessageBox.critical(self, "Camera could not be saved",
+                                     "The camera was not added. " + self.device_manager.last_save_error)
+                return
             self._populate_camera_tree()
             self._refresh_signal_monitor_cameras()
             assigned = self.add_camera_to_grid(new_cam)
@@ -4517,7 +4526,10 @@ class MainWindow(QMainWindow):
         dlg = DeviceDialog(camera_data=template, parent=self)
         if dlg.exec():
             new_cam = dlg.result_data
-            self.device_manager.add_camera(new_cam)
+            if not self.device_manager.add_camera(new_cam):
+                QMessageBox.critical(self, "Camera could not be saved",
+                                     "The camera was not added. " + self.device_manager.last_save_error)
+                return
             self._populate_camera_tree()
             self._refresh_signal_monitor_cameras()
             self.add_camera_to_grid(new_cam)
