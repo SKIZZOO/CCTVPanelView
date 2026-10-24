@@ -8,6 +8,7 @@ This update fixes camera details being saved without the camera appearing in a v
 - The add-camera dialog explicitly marks completed configuration, and generates unique camera/stream IDs even when cameras share an address.
 - Failed configuration writes roll back the new camera and show an error instead of reporting success.
 - Fixes a missing `time` import in video tile motion/AI callbacks.
+- Windows builds use an isolated dependency search path so unrelated host utilities cannot supply incompatible SSL or C-runtime DLLs.
 
 ## Install
 
