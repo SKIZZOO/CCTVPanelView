@@ -5,11 +5,15 @@ import socket
 import tempfile
 import uuid
 import cv2
+from core.settings import normalize_settings
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Any, Optional
 
 def get_config_path() -> str:
     """Returns the absolute path to cameras_config.json in the application root directory."""
+    override = os.environ.get("CCTVPANELVIEW_CONFIG")
+    if override:
+        return os.path.abspath(override)
     if getattr(sys, "frozen", False):
         base = os.path.dirname(os.path.abspath(sys.executable))
     else:
@@ -54,6 +58,8 @@ class DeviceManager:
                 "auto_record_on_motion": True,
                 "motion_min_area": 2800,
                 "motion_confirm_delay": 1.2,
+                "detection_confirm_sec": 0.8,
+                "motion_hold_sec": 3.0,
                 "motion_foliage_filter": True,
                 "motion_cooldown_sec": 5.0,
                 "ai_conf_threshold": 0.38,
@@ -77,7 +83,14 @@ class DeviceManager:
         if os.path.exists(self.config_file):
             try:
                 with open(self.config_file, "r", encoding="utf-8") as f:
-                    self.config = json.load(f)
+                    loaded = json.load(f)
+                if not isinstance(loaded, dict) or not isinstance(loaded.get("cameras", []), list):
+                    raise ValueError("Configuration must contain a camera list")
+                defaults = self.config["app_settings"].copy()
+                defaults.update(normalize_settings(loaded.get("app_settings", {})))
+                loaded["app_settings"] = defaults
+                loaded["cameras"] = [c for c in loaded.get("cameras", []) if isinstance(c, dict)]
+                self.config = loaded
             except Exception as e:
                 print(f"Failed to load config {self.config_file}: {e}")
         else:
@@ -239,7 +252,8 @@ class DeviceManager:
         merged = dict(self.config.get("app_settings", {}))
         cam_settings = self.get_camera_settings(camera_id)
         merged.update(cam_settings)
-        return merged
+        merged["master_alerts_enabled"] = self.config.get("app_settings", {}).get("master_alerts_enabled", True)
+        return normalize_settings(merged)
 
     def get_stream_exclusion_zones(self, stream_id: str = "", camera_id: Optional[str] = None) -> List[List[float]]:
         """Returns normalized exclusion zones [[x1, y1, x2, y2], ...] for a stream or camera."""

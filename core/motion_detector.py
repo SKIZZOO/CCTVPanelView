@@ -26,7 +26,10 @@ class MotionDetector:
         # Temporal confirmation debounce & stationary zone suppression
         self.confirm_delay = 1.2  # seconds of continuous solid motion before confirmation (filters wind gusts)
         self.foliage_filter_enabled: bool = True  # Intelligent anti-leaf & wind oscillation rejection
-        self._motion_candidate_start = 0.0
+        self._motion_candidate_start = None
+        self.warmup_sec = 1.5
+        self._warmup_started = None
+        self._frame_shape = None
         self.static_count_threshold = 30
         self.static_time_threshold = 3600.0
         self._motion_zones: Dict[int, Dict[str, Any]] = {}
@@ -61,6 +64,7 @@ class MotionDetector:
         static_count_threshold: Optional[int] = None,
         foliage_filter_enabled: Optional[bool] = None
     ):
+        old_sensitivity = self.sensitivity
         self.sensitivity = max(1, min(10, int(sensitivity)))
         self.min_area = max(200, int(min_area))
         if downscale_width is not None:
@@ -73,10 +77,21 @@ class MotionDetector:
             self.static_count_threshold = max(5, int(static_count_threshold))
         if foliage_filter_enabled is not None:
             self.foliage_filter_enabled = bool(foliage_filter_enabled)
-        var_thresh = max(8.0, 32.0 - (self.sensitivity * 1.8))
+        if old_sensitivity != self.sensitivity:
+            self.reset_background()
+
+    def reset_activity(self):
+        self._motion_candidate_start = None
+        self.is_motion_active = False
+        self.last_motion_time = 0.0
+
+    def reset_background(self):
+        var_thresh = max(8.0, 32.0 - self.sensitivity * 1.8)
         self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
-            history=300, varThreshold=var_thresh, detectShadows=False
-        )
+            history=300, varThreshold=var_thresh, detectShadows=False)
+        self._warmup_started = None
+        self._motion_zones.clear()
+        self.reset_activity()
 
     def process_frame(
         self,
@@ -96,6 +111,12 @@ class MotionDetector:
 
         is_mview = self.movement_view if movement_view is None else bool(movement_view)
         h, w = frame.shape[:2]
+        now = time.monotonic()
+        if self._frame_shape != (h, w):
+            self.reset_background()
+            self._frame_shape = (h, w)
+        if self._warmup_started is None:
+            self._warmup_started = now
 
         # Downsample for ultra-fast motion processing without high CPU
         target_w = getattr(self, "downscale_width", 480)
@@ -112,6 +133,11 @@ class MotionDetector:
 
         # Apply MOG2 background subtraction
         fg_mask = self.bg_subtractor.apply(blurred)
+        if now - self._warmup_started < self.warmup_sec:
+            self.reset_activity()
+            self.latest_trigger_status = "WARMING UP BACKGROUND"
+            self.latest_boxes_detail = []
+            return frame, False, []
 
         # Remove noise: first apply morphological opening (erodes small fluttering leaf speckles)
         # then dilate to reconnect solid body contours (persons, cars, animals)
@@ -148,6 +174,7 @@ class MotionDetector:
 
         # Check for sudden global lighting surge or violent camera shake
         if fg_ratio > 0.24:
+            self.reset_activity()
             self.latest_trigger_status = "[REJECTED] LIGHTING SHIFT / CAMERA SHAKE"
             self.latest_max_contour_area = 0
             self.latest_motion_area = 0
@@ -170,6 +197,7 @@ class MotionDetector:
 
         # If too many fragmented contours scattered across the screen, camera is shaking / foliage vibration
         if len(contours) > 25:
+            self.reset_activity()
             self.latest_trigger_status = "[REJECTED] CAMERA VIBRATION / WIND (>25 CONTOURS)"
             self.latest_max_contour_area = 0
             self.latest_motion_area = 0
@@ -247,12 +275,11 @@ class MotionDetector:
         self.latest_motion_area = total_motion_area
         self.latest_boxes_detail = all_boxes_detail
 
-        now = time.time()
         valid_boxes = self._filter_stationary_motion_boxes(detected_boxes, now)
         has_current_motion = len(valid_boxes) > 0
 
         if has_current_motion:
-            if self._motion_candidate_start == 0.0:
+            if self._motion_candidate_start is None:
                 self._motion_candidate_start = now
             deb_elapsed = now - self._motion_candidate_start
             if deb_elapsed >= self.confirm_delay:
@@ -262,7 +289,7 @@ class MotionDetector:
             else:
                 self.latest_trigger_status = f"[DEBOUNCING] {deb_elapsed:.1f}s / {self.confirm_delay:.1f}s ({max_contour_area:,}px)"
         else:
-            self._motion_candidate_start = 0.0
+            self._motion_candidate_start = None
             if (now - self.last_motion_time) > self.motion_cooldown:
                 self.is_motion_active = False
                 if max_contour_area > 0:
@@ -405,7 +432,7 @@ class MotionDetector:
                 z["count"] += 1
                 z["last_seen"] = now
                 z["duration"] = now - z["first_seen"]
-                if z["count"] >= self.static_count_threshold or z["duration"] >= self.static_time_threshold:
+                if (z["count"] >= self.static_count_threshold and z["duration"] >= max(30.0, self.confirm_delay + self.motion_cooldown)) or z["duration"] >= self.static_time_threshold:
                     z["is_static"] = True
 
                 if not z["is_static"]:

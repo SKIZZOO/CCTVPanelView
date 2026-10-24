@@ -195,9 +195,12 @@ class PTZPad(QFrame):
 
         self.camera_ip = str(camera_ip).strip()
         self.stream_id = stream_id or self.stream_id
-        p_val = int(port) if (1 <= int(port) <= 65535) else 8899
-
-        self.controller = PTZController(self.camera_ip, username, password, port=p_val)
+        try:
+            p_val = int(port) if (1 <= int(port) <= 65535) else 8899
+            self.controller = PTZController(self.camera_ip, username, password, port=p_val)
+        except (ValueError, TypeError):
+            self.clear_camera()
+            return
         if stream_id and ("lens2" in stream_id.lower() or "ch01" in stream_id.lower()):
             self.controller.set_profile("profile_1")
         else:

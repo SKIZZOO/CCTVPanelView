@@ -792,6 +792,9 @@ class TemporalDetectionTracker:
             track = self._tracks[tid]
 
             # Update timing & hit count
+            if not track.is_confirmed and now - track.last_seen > self.persistence_timeout:
+                track.first_seen = now
+                track.detection_count = 0
             track.last_seen = now
             track.detection_count += 1
             if det.description:
@@ -820,14 +823,15 @@ class TemporalDetectionTracker:
                 track.stationary_detections = 1
                 track.stationary_start_time = now
                 track.stationary_duration = 0.0
+                was_static = track.is_static
                 track.is_static = False
-                track.is_confirmed = True
-                track.has_alerted = False  # Moved significantly, can alert again if confirmed in new position
+                if was_static:
+                    track.has_alerted = False  # Moved significantly, can alert again if confirmed in new position
             else:
                 # Target remains in the same spot!
                 track.stationary_detections += 1
                 track.stationary_duration = now - track.stationary_start_time
-                min_static_sec = 0.0 if self.static_count_threshold < 30 else (300.0 if track.category == "person" else 30.0)
+                min_static_sec = 300.0 if track.category == "person" else 30.0
                 if (track.stationary_detections >= self.static_count_threshold and track.stationary_duration >= min_static_sec) or track.stationary_duration >= self.static_time_threshold:
                     track.is_static = True
                     self._register_static_anchor(track, now)

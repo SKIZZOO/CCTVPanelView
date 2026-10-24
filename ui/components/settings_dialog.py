@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QWidget, QLabel, QPushButton,
     QComboBox, QSlider, QLineEdit, QFileDialog, QScrollArea, QFrame,
     QProgressBar, QStackedWidget, QListWidget, QListWidgetItem,
-    QApplication, QMessageBox, QSpinBox
+    QApplication, QMessageBox, QSpinBox, QDoubleSpinBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QSize, QRectF, QPointF, QThread
 from PyQt6.QtGui import (
@@ -1310,6 +1310,47 @@ class SettingsDialog(QDialog):
         cd_lay.addWidget(lbl_cd_val)
         card_size.add_row(SettingRow("Cooldown Between Consecutive Alerts", "Quiet period between alerts from the same camera", cd_box))
 
+        self.spin_motion_confirm = QDoubleSpinBox()
+        self.spin_motion_confirm.setRange(0.0, 10.0)
+        self.spin_motion_confirm.setSingleStep(0.1)
+        self.spin_motion_confirm.setSuffix(" s")
+        self.spin_motion_confirm.setValue(float(self.settings.get("motion_confirm_delay", 1.2)))
+        card_size.add_row(SettingRow("Motion confirmation", "Continuous motion required before an alert. Longer delays reject brief disturbances.", self.spin_motion_confirm))
+        self.spin_ai_confirm = QDoubleSpinBox()
+        self.spin_ai_confirm.setRange(0.0, 10.0)
+        self.spin_ai_confirm.setSingleStep(0.1)
+        self.spin_ai_confirm.setSuffix(" s")
+        self.spin_ai_confirm.setValue(float(self.settings.get("detection_confirm_sec", 0.8)))
+        card_size.add_row(SettingRow("AI confirmation", "An object must persist across at least two detections and this delay.", self.spin_ai_confirm))
+        self.spin_motion_hold = QDoubleSpinBox()
+        self.spin_motion_hold.setRange(0.5, 30.0)
+        self.spin_motion_hold.setSuffix(" s")
+        self.spin_motion_hold.setValue(float(self.settings.get("motion_hold_sec", 3.0)))
+        for spin in (self.spin_motion_confirm, self.spin_ai_confirm, self.spin_motion_hold):
+            spin.setFixedWidth(110)
+            spin.setMinimumHeight(30)
+            spin.setStyleSheet("QDoubleSpinBox { color: #f1f5f9; background: #111a2e; border: 1px solid #334155; border-radius: 6px; padding: 4px; }")
+        card_size.add_row(SettingRow("Motion hold", "Keep motion active briefly after movement stops; this is separate from alert cooldown.", self.spin_motion_hold))
+        self.cmb_detection_preset = QComboBox()
+        self.cmb_detection_preset.addItem("Outdoor / foliage", (2800, 55, 1.2, 0.8, 10, True))
+        self.cmb_detection_preset.addItem("Indoor / quiet scene", (1200, 50, 0.6, 0.6, 5, False))
+        self.cmb_detection_preset.addItem("Fast crossing", (1200, 60, 0.2, 0.3, 5, True))
+        self.btn_detection_preset = QPushButton("Apply preset")
+        def apply_detection_preset():
+            area, confidence, motion_delay, ai_delay, cooldown, foliage = self.cmb_detection_preset.currentData()
+            self.slider_min_area.setValue(area)
+            self.slider_ai_conf.setValue(confidence)
+            self.spin_motion_confirm.setValue(motion_delay)
+            self.spin_ai_confirm.setValue(ai_delay)
+            self.slider_cooldown.setValue(cooldown)
+            self.sw_foliage_filter.setChecked(foliage)
+        self.btn_detection_preset.clicked.connect(apply_detection_preset)
+        preset_row = QWidget()
+        preset_layout = QHBoxLayout(preset_row)
+        preset_layout.setContentsMargins(0, 0, 0, 0)
+        preset_layout.addWidget(self.cmb_detection_preset)
+        preset_layout.addWidget(self.btn_detection_preset)
+        card_size.add_row(SettingRow("Scene preset", "Apply a starting point, then tune against real activity in your camera view.", preset_row))
         layout.addWidget(card_size)
         layout.addStretch(1)
         self.stack.addWidget(scroll)
@@ -2265,6 +2306,9 @@ class SettingsDialog(QDialog):
             "ai_conf_threshold": float(self.slider_ai_conf.value()) / 100.0 if hasattr(self, "slider_ai_conf") else 0.40,
             "motion_min_area": self.slider_min_area.value() if hasattr(self, "slider_min_area") else 2800,
             "motion_foliage_filter": self.sw_foliage_filter.isChecked() if hasattr(self, "sw_foliage_filter") else True,
+            "motion_confirm_delay": self.spin_motion_confirm.value(),
+            "detection_confirm_sec": self.spin_ai_confirm.value(),
+            "motion_hold_sec": self.spin_motion_hold.value(),
             "motion_cooldown_sec": float(self.slider_cooldown.value()) if hasattr(self, "slider_cooldown") else 3.0,
 
             # Storage & GDrive
@@ -2365,6 +2409,9 @@ class SettingsDialog(QDialog):
             "ai_conf_threshold": self.slider_ai_conf.value() if hasattr(self, "slider_ai_conf") else 40,
             "motion_min_area": self.slider_min_area.value() if hasattr(self, "slider_min_area") else 2800,
             "motion_foliage_filter": self.sw_foliage_filter.isChecked() if hasattr(self, "sw_foliage_filter") else True,
+            "motion_confirm_delay": self.spin_motion_confirm.value(),
+            "detection_confirm_sec": self.spin_ai_confirm.value(),
+            "motion_hold_sec": self.spin_motion_hold.value(),
             "motion_cooldown_sec": self.slider_cooldown.value() if hasattr(self, "slider_cooldown") else 3,
 
             "recording_dir": self.txt_rec_dir.text().strip() if hasattr(self, "txt_rec_dir") else "",

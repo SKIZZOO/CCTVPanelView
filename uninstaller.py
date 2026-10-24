@@ -79,12 +79,11 @@ class UninstallerWorker(QThread):
 
             # Step 1: Terminate running processes
             advance(10, "Closing active CCTVPanelView processes...", "[PROC] Checking for active surveillance engine instances...")
-            try:
-                creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
-                subprocess.run(["taskkill", "/f", "/im", "CCTVPanelView.exe"], capture_output=True, creationflags=creationflags)
-                subprocess.run(["taskkill", "/f", "/im", "pythonw.exe"], capture_output=True, creationflags=creationflags)
-            except Exception:
-                pass
+            import psutil
+            target_exe = os.path.normcase(os.path.join(self.target_dir, "CCTVPanelView.exe"))
+            for proc in psutil.process_iter(["exe"]):
+                if os.path.normcase(proc.info.get("exe") or "") == target_exe:
+                    raise RuntimeError("Close CCTVPanelView before uninstalling so recordings can finish safely.")
             advance(20, "Process inspection completed.", "[PROC] Active workstation processes halted.")
 
             # Step 2: Remove Windows Desktop & Start Menu Shortcuts
@@ -128,7 +127,7 @@ class UninstallerWorker(QThread):
             advance(80, "Removing core binaries & UI libraries...", "[FS] Deleting application core engine and neural models...")
             items_to_remove = [
                 "core", "ui", "assets", "sounds",
-                "CCTVPanelView.exe", "mobilenet.caffemodel", "deploy.prototxt",
+                "CCTVPanelView.exe", "mobilenet.caffemodel", "yolov5n.onnx", "deploy.prototxt",
                 "main.py", "cctv_server.py", "CCTVPanelView.vbs", "crash.log"
             ]
             for item in items_to_remove:
@@ -193,8 +192,6 @@ class CCTVPanelViewUninstaller(QMainWindow):
             is_dev_repo = os.path.exists(os.path.join(parent, "installer.py")) or "cam720" in parent.lower()
             if not is_dev_repo and (os.path.exists(os.path.join(parent, "CCTVPanelView.exe")) or os.path.exists(os.path.join(parent, "cameras_config.json"))):
                 self.target_dir = parent
-            elif os.path.exists(r"G:\CCTVPanelView"):
-                self.target_dir = r"G:\CCTVPanelView"
             else:
                 self.target_dir = os.path.join(os.environ.get("LOCALAPPDATA", "C:\\"), "Programs", APP_NAME)
         else:

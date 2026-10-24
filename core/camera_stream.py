@@ -86,6 +86,7 @@ class CameraStreamWorker(QThread):
         self._reconnect_requested = False
 
         # Motion Detection
+        self.alerts_armed = True
         self.motion_detection_enabled = True
         self.auto_record_on_motion = False
         self.detector = MotionDetector(sensitivity=5, min_area=2800)
@@ -189,6 +190,7 @@ class CameraStreamWorker(QThread):
         self.show_ai_overlays = True
         self._active_alert_sessions = []
         self._is_alert_recording = False
+        self.pre_alarm_buffer_sec = 3.0
         self._frame_ring_buffer = collections.deque(maxlen=30)
         self._last_ring_buffer_time = 0.0
 
@@ -238,27 +240,10 @@ class CameraStreamWorker(QThread):
         """Attaches an AlertClipSession and flushes up to 3 seconds of pre-alarm frames."""
         try:
             now = time.time()
-            cutoff = now - 3.0  # Exactly 3 seconds pre-alarm incident buffer
-            for item in list(self._frame_ring_buffer):
-                if len(item) == 2:
-                    frame_data, t = item
-                    if t >= cutoff:
-                        if isinstance(frame_data, (bytes, np.ndarray)) and (isinstance(frame_data, bytes) or frame_data.ndim == 1):
-                            dec_frame = cv2.imdecode(frame_data, cv2.IMREAD_COLOR)
-                        else:
-                            dec_frame = frame_data
-                        if dec_frame is not None:
-                            session.push_frame(dec_frame, dec_frame, has_activity=True)
-                elif len(item) == 3:
-                    r_f, hl_f, t = item
-                    if t >= cutoff:
-                        if isinstance(r_f, (bytes, np.ndarray)) and (isinstance(r_f, bytes) or r_f.ndim == 1):
-                            r_f = cv2.imdecode(r_f, cv2.IMREAD_COLOR)
-                        if isinstance(hl_f, (bytes, np.ndarray)) and (isinstance(hl_f, bytes) or hl_f.ndim == 1):
-                            hl_f = cv2.imdecode(hl_f, cv2.IMREAD_COLOR)
-                        session.push_frame(r_f, hl_f, has_activity=True)
-                else:
-                    session.push_frame(item[0], item[1], has_activity=True)
+            cutoff = now - self.pre_alarm_buffer_sec
+            buffered = [(data, stamp) for data, stamp in list(self._frame_ring_buffer)
+                        if stamp >= cutoff and self.pre_alarm_buffer_sec > 0]
+            session.set_prebuffer(buffered)
             self._active_alert_sessions.append(session)
             self._is_alert_recording = True
         except Exception as e:
@@ -470,6 +455,8 @@ class CameraStreamWorker(QThread):
         if "quality" in settings:
             self.set_quality(settings["quality"])
 
+        self.alerts_armed = bool(settings.get("master_alerts_enabled", True))
+
         # Night vision
         n_mode = settings.get("night_mode", settings.get("night_vision_mode"))
         if n_mode is not None:
@@ -481,7 +468,7 @@ class CameraStreamWorker(QThread):
             self.set_night_boost(settings["night_boost"])
 
         # Motion detection & Movement view
-        m_en = settings.get("motion_enabled", self.motion_detection_enabled)
+        m_en = self.alerts_armed and settings.get("motion_enabled", self.motion_detection_enabled)
         m_sens = settings.get("motion_sensitivity", 5)
         m_min_area = settings.get("motion_min_area", getattr(self.detector, "min_area", 2800))
         m_confirm_delay = settings.get("motion_confirm_delay", getattr(self.detector, "confirm_delay", 1.2))
@@ -493,13 +480,14 @@ class CameraStreamWorker(QThread):
                 sensitivity=m_sens,
                 min_area=m_min_area,
                 confirm_delay=m_confirm_delay,
+                motion_cooldown=settings.get("motion_hold_sec", 3.0),
                 foliage_filter_enabled=m_foliage
             )
         if "movement_view_enabled" in settings:
             self.set_movement_view(settings["movement_view_enabled"])
 
         # AI Object Detection
-        ai_en = settings.get("ai_detection_enabled", self.ai_detection_enabled)
+        ai_en = self.alerts_armed and settings.get("ai_detection_enabled", self.ai_detection_enabled)
         ai_p = settings.get("ai_detect_person", True)
         ai_a = settings.get("ai_detect_animal", True)
         ai_v = settings.get("ai_detect_vehicle", True)
@@ -521,8 +509,8 @@ class CameraStreamWorker(QThread):
             self.vehicle_conf_threshold = ai_c
         if "notify_motion" in settings:
             self.notify_motion = bool(settings["notify_motion"])
-        if "alert_cooldown_sec" in settings:
-            cd = float(settings["alert_cooldown_sec"])
+        if "alert_cooldown_sec" in settings or "motion_cooldown_sec" in settings:
+            cd = max(1.0, float(settings.get("alert_cooldown_sec", settings.get("motion_cooldown_sec", 5.0))))
             self.ai_alarm_cooldown = cd
             self.motion_alarm_cooldown = cd
         self.set_ai_detection(enabled=ai_en, person=ai_p, animal=ai_a, vehicle=ai_v, conf=ai_c)
@@ -541,9 +529,7 @@ class CameraStreamWorker(QThread):
         # Confirmation debounce & static object suppression
         if "detection_confirm_sec" in settings:
             d_sec = float(settings["detection_confirm_sec"])
-            self.ai_tracker.confirm_delay = min(0.3, d_sec)
-            if hasattr(self.detector, "confirm_delay"):
-                self.detector.confirm_delay = d_sec
+            self.ai_tracker.confirm_delay = max(0.0, min(10.0, d_sec))
         if "static_suppress_count" in settings:
             s_cnt = int(settings["static_suppress_count"])
             self.ai_tracker.static_count_threshold = s_cnt
@@ -554,6 +540,11 @@ class CameraStreamWorker(QThread):
             self.ai_tracker.static_time_threshold = s_sec
             if hasattr(self.detector, "static_time_threshold"):
                 self.detector.static_time_threshold = s_sec
+
+        if "pre_alarm_buffer_sec" in settings:
+            self.pre_alarm_buffer_sec = max(0.0, min(10.0, float(settings["pre_alarm_buffer_sec"])))
+            self._frame_ring_buffer = collections.deque(
+                self._frame_ring_buffer, maxlen=max(1, int(self.pre_alarm_buffer_sec * 10)))
 
         # Dual clips & AI Overlay view preferences
         if "record_dual_clips" in settings:
@@ -620,12 +611,16 @@ class CameraStreamWorker(QThread):
         self.is_solo_view = bool(solo)
 
     def set_motion_detection(self, enabled: bool, sensitivity: int = 5, auto_record: bool = False):
+        enabled = bool(enabled and self.alerts_armed)
+        if not enabled:
+            self.detector.reset_activity()
         self.motion_detection_enabled = enabled
-        self.auto_record_on_motion = auto_record
+        self.auto_record_on_motion = bool(auto_record and self.alerts_armed)
         cur_area = getattr(self.detector, "min_area", 2800)
         self.detector.update_settings(sensitivity, cur_area)
 
     def set_ai_detection(self, enabled: bool = True, person: bool = True, animal: bool = True, vehicle: bool = True, conf: float = 0.38):
+        enabled = bool(enabled and self.alerts_armed)
         self.ai_detection_enabled = enabled
         if not enabled:
             self._last_ai_detections = []
@@ -641,7 +636,7 @@ class CameraStreamWorker(QThread):
     def set_ai_tracking(self, confirm_delay: float = 1.0, static_count: int = 150, static_time: float = 300.0):
         """Configures temporal confirmation delay (1.0s) and stationary object suppression thresholds."""
         if hasattr(self, "ai_tracker"):
-            self.ai_tracker.confirm_delay = min(0.3, float(confirm_delay))
+            self.ai_tracker.confirm_delay = max(0.0, min(10.0, float(confirm_delay)))
             self.ai_tracker.static_count_threshold = int(static_count)
             self.ai_tracker.static_time_threshold = float(static_time)
         if hasattr(self.detector, "confirm_delay"):
@@ -838,6 +833,7 @@ class CameraStreamWorker(QThread):
                         else:
                             # Suppress motion alarm if camera is physically shaking in the wind
                             if is_shaking and self.wind_filter.enabled:
+                                self.detector.reset_activity()
                                 is_motion = False
                             else:
                                 frame, is_motion, boxes = self.detector.process_frame(
@@ -858,7 +854,7 @@ class CameraStreamWorker(QThread):
     
                         # Auto-record on motion/AI trigger with dynamic duration up to 5 min
                         if self.auto_record_on_motion:
-                            has_ai_activity = any(d.is_confirmed and not getattr(d, "is_static_suppressed", False) for d in self._last_ai_detections)
+                            has_ai_activity = any(d.is_confirmed and not getattr(d, "is_static", False) and not getattr(d, "is_static_suppressed", False) for d in self._last_ai_detections)
                             has_activity = bool(is_motion or has_ai_activity)
                             if has_activity:
                                 self._last_motion_detected_time = now
@@ -867,19 +863,8 @@ class CameraStreamWorker(QThread):
                                     max_a = getattr(self.detector, "latest_max_contour_area", 0)
                                     self._record_trigger_reason = f"Motion ({max_a:,}px >= {self.detector.min_area:,}px)"
                                     self.start_recording()
-                            elif self._recording and self._motion_triggered_rec:
-                                elapsed = now - self._record_start_time
-                                quiet_dur = now - getattr(self, "_last_motion_detected_time", now)
-                                # Clip lasts as long as object/alert is tracked, up to 300s (5 min), stops when quiet for 5s (min 8s)
-                                if elapsed >= 300.0 or (elapsed >= 8.0 and quiet_dur >= 5.0):
-                                    try:
-                                        self.stop_recording()
-                                    except Exception as rec_err:
-                                        print(f"[{self.stream_name}] Error stopping motion recording: {rec_err}")
-                                    self._motion_triggered_rec = False
-    
                         # Motion Alert: trigger alert card if notify_motion is enabled and cooldown elapsed
-                        if is_motion and self.notify_motion and (now - self._last_motion_alarm_time) >= self.motion_alarm_cooldown:
+                        if is_motion and boxes and self.motion_detection_enabled and self.notify_motion and (now - self._last_motion_alarm_time) >= self.motion_alarm_cooldown:
                             self._handle_motion_alarm(frame, boxes)
     
                     # --- 4. AI Person & Animal Detection Engine ---
@@ -1020,13 +1005,23 @@ class CameraStreamWorker(QThread):
                                     self._last_motion_detected_time = now
                                     if not self._recording:
                                         self._motion_triggered_rec = True
-                                        self._record_trigger_reason = f"AI {top_target.class_name.title()} ({int(top_target.confidence * 100)}%)"
-                                        self.start_recording(tag=f"AI_{top_target.class_name.upper()}")
+                                        self._record_trigger_reason = f"AI {top_target.label.title()} ({int(top_target.confidence * 100)}%)"
+                                        self.start_recording(tag=f"AI_{top_target.label.upper()}")
     
                     frame_times.append(now)
                     frame_times = [t for t in frame_times if now - t <= 1.0]
                     current_fps = float(len(frame_times))
     
+                    if self._recording and self._motion_triggered_rec:
+                        ai_active = any(d.is_confirmed and not d.is_static for d in self._last_ai_detections)
+                        if is_motion or ai_active:
+                            self._last_motion_detected_time = now
+                        elapsed = now - self._record_start_time
+                        quiet = now - getattr(self, "_last_motion_detected_time", now)
+                        if not self.alerts_armed or elapsed >= 300.0 or (elapsed >= 8.0 and quiet >= 5.0):
+                            self.stop_recording()
+                            self._motion_triggered_rec = False
+
                     # Handle snapshot request
                     if self._snapshot_requested:
                         self._save_snapshot_internal(frame)
@@ -1085,8 +1080,8 @@ class CameraStreamWorker(QThread):
                             except Exception:
                                 pass
                         if self._active_alert_sessions:
-                            has_ai_activity = any(d.is_confirmed and not getattr(d, "is_static_suppressed", False) for d in self._last_ai_detections)
-                            has_person = any(d.category == "person" and d.is_confirmed and not getattr(d, "is_static_suppressed", False) for d in self._last_ai_detections)
+                            has_ai_activity = any(d.is_confirmed and not getattr(d, "is_static", False) and not getattr(d, "is_static_suppressed", False) for d in self._last_ai_detections)
+                            has_person = any(d.category == "person" and d.is_confirmed and not getattr(d, "is_static", False) and not getattr(d, "is_static_suppressed", False) for d in self._last_ai_detections)
                             has_activity = bool(is_motion or has_ai_activity)
                             surviving = []
                             for s in self._active_alert_sessions:
@@ -1145,8 +1140,8 @@ class CameraStreamWorker(QThread):
                                 self._frame_ring_buffer.append((f_jpg, now))
                             except Exception:
                                 pass
-                        has_ai_activity = any(d.is_confirmed and not getattr(d, "is_static_suppressed", False) for d in self._last_ai_detections)
-                        has_person = any(d.category == "person" and d.is_confirmed and not getattr(d, "is_static_suppressed", False) for d in self._last_ai_detections)
+                        has_ai_activity = any(d.is_confirmed and not getattr(d, "is_static", False) and not getattr(d, "is_static_suppressed", False) for d in self._last_ai_detections)
+                        has_person = any(d.category == "person" and d.is_confirmed and not getattr(d, "is_static", False) and not getattr(d, "is_static_suppressed", False) for d in self._last_ai_detections)
                         has_activity = bool(is_motion or has_ai_activity)
                         surviving = []
                         for s in self._active_alert_sessions:

@@ -8,7 +8,7 @@
 
 A desktop viewer for RTSP/ONVIF IP cameras, with motion alerts, optional on-device object detection, local recording, and a browser interface for phones and tablets.
 
-[**Download for Windows**](https://github.com/SKIZZOO/CCTVPanelView/releases/latest) · [Features](#what-you-can-do) · [Quick start](#install-the-windows-release) · [Security](#web-access-and-security) · [Test report](docs/REVIEW-2026-10-24.md)
+[**Download for Windows**](https://github.com/SKIZZOO/CCTVPanelView/releases/latest) · [Features](#what-you-can-do) · [Quick start](#install-the-windows-release) · [Security](#security-and-privacy) · [2.1.0 changes and validation](docs/RELEASE-2.1.0.md)
 
 ![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4)
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776ab)
@@ -17,6 +17,8 @@ A desktop viewer for RTSP/ONVIF IP cameras, with motion alerts, optional on-devi
 </div>
 
 ---
+
+<img src="docs/screenshots/workstation.png" width="1100" alt="CCTVPanelView desktop with responsive header and camera grid">
 
 ## What you can do
 
@@ -59,10 +61,10 @@ Use Settings to adjust appearance, recording and storage, motion/object detectio
 ## Install the Windows release
 
 1. Open [the latest release](https://github.com/SKIZZOO/CCTVPanelView/releases/latest).
-2. Download and extract `CCTVPanelView-v2.0-Setup.zip`.
-3. Run `CCTVPanelView-Setup.exe` from the extracted folder and follow the setup prompts.
+2. Download **CCTVPanelView-2.1.0-Setup.exe** and run it.
+3. Choose an installation folder and shortcuts, then launch the app from the Desktop or Start Menu.
 
-The release ZIP contains the installer; the installer executable is inside the archive.
+The installer bundles Python, Qt, AI models, and FFmpeg/FFplay/FFprobe. Normal use needs no Python setup or batch files. Updates preserve existing camera configuration. Close the running app before an update so recordings can finish. A graphical uninstaller is available through Windows Installed Apps.
 
 ## Run from source
 
@@ -100,6 +102,23 @@ The web server uses HTTP. Keep it on a trusted LAN or use a trusted VPN. For acc
 
 Availability can depend on the camera, notification provider, and settings in use.
 
+### Tune detection for the scene
+
+<img src="docs/screenshots/settings_triggers.png" width="1050" alt="Detection settings with confirmation delays, cooldown, hold and scene presets">
+
+Start with an **Outdoor**, **Indoor**, or **Fast crossing** preset, then observe real activity and adjust:
+
+| Setting | What it controls |
+| --- | --- |
+| Minimum object size | Rejects small motion contours, measured in source-frame pixels. Recalibrate if stream resolution changes. |
+| Minimum AI confidence | Rejects uncertain classifications. Higher values can reduce false positives and miss more objects. |
+| Motion confirmation | How long solid movement must continue before motion confirms. |
+| AI confirmation | How long an object must persist across at least two detections. |
+| Motion hold | Keeps motion active briefly after movement stops. |
+| Alert cooldown | Minimum spacing between consecutive alerts from a stream. |
+
+The background model warms up before motion alerts become active. Lighting shifts reset pending motion. Arming/disarming preserves your choices. Layout, empty tiles, hidden assignments, window size/position, and sidebar state are saved when you exit and restored at startup.
+
 ## Keyboard shortcuts
 
 | Shortcut | Action |
@@ -127,6 +146,16 @@ See [the UI, reliability, scaling, and security review](docs/REVIEW-2026-10-24.m
 ```powershell
 python -m unittest discover -s tests -v
 ```
+
+## Build a Windows installer
+
+Install `requirements.txt` and `requirements-build.txt` in a Windows virtual environment. Obtain a Windows FFmpeg build containing `ffmpeg.exe`, `ffplay.exe`, and `ffprobe.exe`, then run:
+
+```powershell
+python tools/build_windows.py --ffmpeg-dir C:\path\to\ffmpeg\bin
+```
+
+The build produces the app, uninstaller, and setup executable in `dist/` and runs an offline packaged-app check. See [release validation](docs/RELEASE-2.1.0.md) and [third-party notices](docs/THIRD_PARTY_NOTICES.md).
 
 ## License
 

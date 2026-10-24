@@ -439,7 +439,9 @@ class MainWindow(QMainWindow):
         self.signal_monitor = SignalMonitor(check_interval_sec=4.0, parent=self)
         self.signal_monitor.signals_updated.connect(self._on_signals_updated)
 
+        self._restoring_session = True
         self._setup_ui()
+        self.restore_window_state()
         if self.app_settings.get("sidebar_position") == "right":
             self.toggle_sidebar_position()
         self._setup_shortcuts()
@@ -2085,28 +2087,46 @@ class MainWindow(QMainWindow):
         - Active grid layout key
         - Exact camera stream ID assigned to each individual visible grid slot
         """
+        if getattr(self, "_restoring_session", False):
+            return
         if not hasattr(self, "app_settings") or self.app_settings is None:
             return
 
         layout_key = getattr(self, "current_layout", "2x2")
         self.app_settings["default_layout"] = layout_key
 
-        layout_slot_map = {"1x1": 1, "2x1": 2, "1x2": 2, "2x2": 4, "1+5": 6, "3x3": 9, "4x4": 16}
-        if layout_key == "custom":
-            cfg = self.app_settings.get("custom_layout", {})
-            num_slots = len(cfg.get("slots", [])) or 4
-        else:
-            num_slots = layout_slot_map.get(layout_key, 4)
-
-        slot_map = {}
-        for idx in range(min(num_slots, len(self.video_tiles))):
-            tile = self.video_tiles[idx]
-            slot_map[str(idx)] = tile.stream_id if getattr(tile, "stream_id", None) else ""
+        # Keep hidden tile assignments too, so shrinking the grid is reversible.
+        slot_map = {str(idx): (getattr(tile, "stream_id", None) or "")
+                    for idx, tile in enumerate(self.video_tiles)}
+        rect = self.normalGeometry() if self.isMaximized() or self.isFullScreen() else self.geometry()
+        self.app_settings["window_rect"] = [rect.x(), rect.y(), rect.width(), rect.height()]
+        self.app_settings["window_maximized"] = self.isMaximized()
+        self.app_settings["sidebar_visible"] = self.is_sidebar_visible
+        sizes = self.splitter.sizes()
+        sidebar_idx = self.splitter.indexOf(self.sidebar)
+        if 0 <= sidebar_idx < len(sizes) and sizes[sidebar_idx] > 0:
+            self.app_settings["sidebar_width"] = sizes[sidebar_idx]
+        self.app_settings["selected_tile"] = self.selected_tile_idx
 
         self.app_settings["session_slot_assignments"] = slot_map
         if hasattr(self, "device_manager") and self.device_manager:
             self.device_manager.config["app_settings"] = self.app_settings
             self.device_manager.save_config()
+
+    def restore_window_state(self):
+        rect = self.app_settings.get("window_rect")
+        if isinstance(rect, list) and len(rect) == 4:
+            try:
+                x, y, w, h = [int(v) for v in rect]
+                screen = QApplication.screenAt(QPoint(x + w // 2, y + h // 2)) or QApplication.primaryScreen()
+                area = screen.availableGeometry()
+                w, h = min(max(960, w), area.width()), min(max(600, h), area.height())
+                self.setGeometry(max(area.left(), min(x, area.right() - w + 1)),
+                                 max(area.top(), min(y, area.bottom() - h + 1)), w, h)
+            except (ValueError, TypeError):
+                pass
+        if self.app_settings.get("window_maximized", False):
+            self.setWindowState(self.windowState() | Qt.WindowState.WindowMaximized)
 
     def activate_startup_view(self):
         """
@@ -2115,6 +2135,7 @@ class MainWindow(QMainWindow):
         - Restores the exact camera stream assigned to each individual slot
         - Auto-fills remaining visible slots with unassigned streams (e.g. wide lens on dual-lens cameras)
         """
+        saved_selection = self.app_settings.get("selected_tile", 0)
         self._restoring_session = True
         try:
             if "default_layout" in self.app_settings:
@@ -2143,36 +2164,22 @@ class MainWindow(QMainWindow):
             stream_by_id = {s.get("id"): s for s in all_streams if s.get("id")}
 
             restored_count = 0
-            if saved_assignments:
-                for slot_idx in range(num_slots):
-                    str_idx = str(slot_idx)
-                    if str_idx in saved_assignments:
-                        s_id = saved_assignments[str_idx]
-                        if s_id and s_id in stream_by_id:
-                            self.start_stream_on_tile(slot_idx, stream_by_id[s_id])
-                            restored_count += 1
-
-            # Fallback to sequential streams if no assignments were restored (first run or fresh install)
-            if restored_count == 0:
-                for idx, s in enumerate(all_streams[:num_slots]):
-                    self.start_stream_on_tile(idx, s)
-                    restored_count += 1
-            else:
-                # If there are empty visible slots that were not explicitly saved as closed, fill with unassigned streams
-                assigned_stream_ids = {t.stream_id for t in self.video_tiles if t.stream_id}
-                unassigned = [s for s in all_streams if s.get("id") and s.get("id") not in assigned_stream_ids]
-                for idx in range(num_slots):
-                    tile = self.video_tiles[idx]
-                    str_idx = str(idx)
-                    if not tile.stream_id and (str_idx not in saved_assignments or not saved_assignments.get(str_idx)) and unassigned:
-                        next_s = unassigned.pop(0)
-                        self.start_stream_on_tile(idx, next_s)
+            if isinstance(saved_assignments, dict) and saved_assignments:
+                for slot_idx in range(min(len(self.video_tiles), 16)):
+                    s_id = saved_assignments.get(str(slot_idx), "")
+                    if s_id in stream_by_id:
+                        self.start_stream_on_tile(slot_idx, stream_by_id[s_id])
                         restored_count += 1
+            elif "session_slot_assignments" not in self.app_settings:
+                # Only a first run gets automatic assignments. Explicit blanks stay blank.
+                for idx, stream in enumerate(all_streams[:num_slots]):
+                    self.start_stream_on_tile(idx, stream)
+                    restored_count += 1
         finally:
             self._restoring_session = False
             self.save_session_state()
 
-        self._on_tile_selected(0)
+        self._on_tile_selected(min(max(0, int(saved_selection)), num_slots - 1))
         self.statusBar().showMessage(f"Session restored ({layout_key}) - {restored_count} live cameras active", 5000)
 
     def activate_dual_lens_mode(self):
@@ -3975,34 +3982,9 @@ class MainWindow(QMainWindow):
 
         self.app_settings["master_alerts_enabled"] = self.master_alerts_enabled
 
-        if self.master_alerts_enabled:
-            # Optimal proven alert configuration
-            self.app_settings["motion_enabled"] = True
-            self.app_settings["ai_detection_enabled"] = True
-            self.app_settings["notify_person"] = True
-            self.app_settings["notify_vehicle"] = True
-            self.app_settings["notify_animal"] = True
-            self.app_settings["notify_motion"] = True
-            self.app_settings["show_desktop_notifications"] = True
-            self.app_settings["sound_alarms_enabled"] = True
-            self.app_settings["auto_record_on_motion"] = True
-            self.app_settings["motion_min_area"] = self.app_settings.get("motion_min_area", 2800)
-            self.app_settings["motion_confirm_delay"] = self.app_settings.get("motion_confirm_delay", 1.2)
-            self.app_settings["motion_foliage_filter"] = self.app_settings.get("motion_foliage_filter", True)
-            self.app_settings["vehicle_conf_threshold"] = self.app_settings.get("vehicle_conf_threshold", 0.38)
-            self.app_settings["motion_cooldown_sec"] = self.app_settings.get("motion_cooldown_sec", 5.0)
-            self.app_settings["ai_conf_threshold"] = self.app_settings.get("ai_conf_threshold", 0.38)
-            self.global_motion_enabled = True
-            self.sound_alarms_enabled = True
-        else:
-            self.app_settings["motion_enabled"] = False
-            self.app_settings["ai_detection_enabled"] = False
-            self.app_settings["notify_person"] = False
-            self.app_settings["notify_vehicle"] = False
-            self.app_settings["notify_animal"] = False
-            self.app_settings["notify_motion"] = False
-            self.global_motion_enabled = False
-
+        # Arming is a gate; it must not overwrite the user's detection/recording preferences.
+        self.global_motion_enabled = self.master_alerts_enabled and self.app_settings.get("motion_enabled", True)
+        self.alert_manager.set_app_settings(self.app_settings)
         self.device_manager.save_config()
         self._update_master_alerts_btn_style()
 
@@ -4020,12 +4002,6 @@ class MainWindow(QMainWindow):
             cam_id = cam.get("id") if cam else ""
             eff = self.device_manager.get_effective_camera_settings(cam_id)
             eff["master_alerts_enabled"] = self.master_alerts_enabled
-            eff["ai_detection_enabled"] = self.master_alerts_enabled
-            eff["motion_enabled"] = self.master_alerts_enabled
-            eff["notify_person"] = self.master_alerts_enabled
-            eff["notify_vehicle"] = self.master_alerts_enabled
-            eff["notify_animal"] = self.master_alerts_enabled
-            eff["notify_motion"] = self.master_alerts_enabled
             worker.apply_camera_settings(eff)
 
         msg = "Security Armed: AI Person, Vehicle & Motion Detection Active" if self.master_alerts_enabled else "Security Disarmed: All Alerts Muted"

@@ -189,6 +189,15 @@ class InstallerDeploymentWorker(QThread):
                 self.progress_updated.emit(percent, title, detail)
                 self.msleep(180)
 
+            for binary in ("CCTVPanelView.exe", "CCTVPanelView-Uninstall.exe"):
+                if not os.path.isfile(os.path.join(BASE_DIR, binary)):
+                    raise RuntimeError("Installer payload is incomplete: " + binary)
+            import psutil
+            target_exe = os.path.normcase(os.path.join(self.target_dir, "CCTVPanelView.exe"))
+            for proc in psutil.process_iter(["exe"]):
+                if os.path.normcase(proc.info.get("exe") or "") == target_exe:
+                    raise RuntimeError("Close CCTVPanelView before installing this update so recordings can finish safely.")
+
             # Step 1: Directory Setup
             advance(5, "Initializing installation environment...", f"[INIT] Validating application path: {self.target_dir}")
             os.makedirs(self.target_dir, exist_ok=True)
@@ -199,18 +208,14 @@ class InstallerDeploymentWorker(QThread):
 
             # Step 2: Copy Core & Engine
             advance(25, "Deploying core CCTV engines...", "[ENGINE] Copying stream orchestrator & hardware monitor...")
-            for folder in ["core", "ui", "assets", "sounds"]:
-                src_path = os.path.join(BASE_DIR, folder)
-                dst_path = os.path.join(self.target_dir, folder)
-                if os.path.exists(src_path) and os.path.abspath(src_path) != os.path.abspath(dst_path):
-                    if os.path.exists(dst_path):
-                        shutil.rmtree(dst_path, ignore_errors=True)
-                    shutil.copytree(src_path, dst_path)
+            src_assets = os.path.join(BASE_DIR, "assets")
+            if os.path.isdir(src_assets):
+                shutil.copytree(src_assets, os.path.join(self.target_dir, "assets"), dirs_exist_ok=True)
             advance(45, "Deploying core libraries and user interface...", "[UI] Deployed modern PyQt6 Obsidian Glass interface assets.")
 
             # Step 3: Copy AI Weights & Core Binaries
             advance(55, "Deploying CCTVPanelView workstation binaries...", "[BIN] Deploying CCTVPanelView core binary & AI engines...")
-            for f in ["CCTVPanelView.exe", "CCTVPanelView-Uninstall.exe", "uninstaller.py", "mobilenet.caffemodel", "deploy.prototxt", "yolov5n.onnx", "main.py", "cctv_server.py"]:
+            for f in ["CCTVPanelView.exe", "CCTVPanelView-Uninstall.exe"]:
                 src = os.path.join(BASE_DIR, f)
                 dst = os.path.join(self.target_dir, f)
                 if os.path.exists(src) and os.path.abspath(src) != os.path.abspath(dst):
@@ -260,34 +265,16 @@ class InstallerDeploymentWorker(QThread):
                 },
                 "cameras": []
             }
-            with open(cfg_dst, "w", encoding="utf-8") as f:
-                json.dump(clean_fresh_config, f, indent=2)
-            advance(82, "Configuring fresh application profile...", "[CONFIG] Clean installation profile initialized (0 cameras, setup wizard pending).")
-
-            # Write silent VBS launcher fallback (no console / no bat)
-            vbs_content = (
-                'Option Explicit\r\n'
-                'Dim WshShell, FSO, ScriptDir\r\n'
-                'Set WshShell = CreateObject("WScript.Shell")\r\n'
-                'Set FSO = CreateObject("Scripting.FileSystemObject")\r\n'
-                'ScriptDir = FSO.GetParentFolderName(WScript.ScriptFullName)\r\n'
-                'WshShell.CurrentDirectory = ScriptDir\r\n'
-                'If FSO.FileExists(ScriptDir & "\\CCTVPanelView.exe") Then\r\n'
-                '    WshShell.Run """" & ScriptDir & "\\CCTVPanelView.exe""", 1, False\r\n'
-                'Else\r\n'
-                '    WshShell.Run "pythonw.exe """ & ScriptDir & "\\main.py""", 0, False\r\n'
-                'End If\r\n'
-                'Set WshShell = Nothing\r\n'
-                'Set FSO = Nothing\r\n'
-            )
-            with open(os.path.join(self.target_dir, "CCTVPanelView.vbs"), "w", encoding="utf-8") as vf:
-                vf.write(vbs_content)
+            if not os.path.exists(cfg_dst):
+                with open(cfg_dst, "w", encoding="utf-8") as f:
+                    json.dump(clean_fresh_config, f, indent=2)
+            advance(82, "Application profile ready", "[CONFIG] Existing cameras and settings preserved when upgrading.")
 
             advance(86, "Configuring Windows shortcuts & shell integration...", "[SHELL] Registering system shell integration...")
 
             # Step 5: Create Windows Desktop and Start Menu Shortcuts directly to CCTVPanelView.exe
             main_exe = os.path.join(self.target_dir, "CCTVPanelView.exe")
-            target_to_launch = main_exe if os.path.exists(main_exe) else os.path.join(self.target_dir, "CCTVPanelView.vbs")
+            target_to_launch = main_exe
 
             icon_file = os.path.join(self.target_dir, "assets", "cctv_logo.ico")
             if not os.path.exists(icon_file):
@@ -383,7 +370,7 @@ class InstallerDeploymentWorker(QThread):
                 reg_path = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\CCTVPanelView"
                 with winreg.CreateKey(winreg.HKEY_CURRENT_USER, reg_path) as k:
                     winreg.SetValueEx(k, "DisplayName", 0, winreg.REG_SZ, "CCTVPanelView AI Surveillance Workstation")
-                    winreg.SetValueEx(k, "DisplayVersion", 0, winreg.REG_SZ, "2.0.0")
+                    winreg.SetValueEx(k, "DisplayVersion", 0, winreg.REG_SZ, "2.1.0")
                     winreg.SetValueEx(k, "Publisher", 0, winreg.REG_SZ, "CCTVPanelView Workstation")
                     winreg.SetValueEx(k, "InstallLocation", 0, winreg.REG_SZ, self.target_dir)
                     uninst_exe = os.path.join(self.target_dir, "CCTVPanelView-Uninstall.exe")
@@ -1090,27 +1077,38 @@ class CCTVPanelViewInstaller(QMainWindow):
                 if should_run_wizard:
                     args.append("--setup")
                 subprocess.Popen(args, cwd=target)
-            elif os.path.exists(main_script):
-                py_exe = None
-                for cand in [
-                    shutil.which("pythonw.exe"),
-                    shutil.which("python.exe"),
-                    sys.executable,
-                ]:
-                    if cand and os.path.exists(cand):
-                        py_exe = cand
-                        break
-                if not py_exe:
-                    py_exe = "python.exe"
-                args = [py_exe, main_script]
-                if should_run_wizard:
-                    args.append("--setup")
-                subprocess.Popen(args, cwd=target)
 
         self.close()
 
 
 def main():
+    if "--self-test" in sys.argv:
+        # Exercise the actual bundled payload in an isolated directory, without shell registration.
+        import json
+        import tempfile
+        report_path = next((arg.split("=", 1)[1] for arg in sys.argv
+                            if arg.startswith("--self-test-report=")), None)
+        result = {"passed": False}
+        try:
+            with tempfile.TemporaryDirectory(prefix="cctv-install-check-") as temp:
+                for name in ("CCTVPanelView.exe", "CCTVPanelView-Uninstall.exe"):
+                    shutil.copy2(os.path.join(BASE_DIR, name), os.path.join(temp, name))
+                app_report = os.path.join(temp, "app-check.json")
+                env = os.environ.copy()
+                env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+                completed = subprocess.run([os.path.join(temp, "CCTVPanelView.exe"), "--self-test",
+                                            "--self-test-report=" + app_report], cwd=temp, env=env,
+                                           timeout=180, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                with open(app_report, encoding="utf-8") as file:
+                    result = json.load(file)
+                result["passed"] = result.get("passed", False) and completed.returncode == 0
+                result["installer_payload_deployed"] = True
+        except Exception as error:
+            result["error"] = str(error)
+        if report_path:
+            with open(report_path, "w", encoding="utf-8") as file:
+                json.dump(result, file, indent=2)
+        raise SystemExit(0 if result["passed"] else 1)
     if hasattr(Qt.ApplicationAttribute, 'AA_EnableHighDpiScaling'):
         QApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling, True)
     if hasattr(Qt.ApplicationAttribute, 'AA_UseHighDpiPixmaps'):

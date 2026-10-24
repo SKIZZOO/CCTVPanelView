@@ -1,12 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
+from pathlib import Path
+ffmpeg_dir = Path(os.environ['CCTVPANELVIEW_FFMPEG_DIR'])
 
 
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=[],
-    datas=[('assets', 'assets'), ('core', 'core'), ('ui', 'ui'), ('sounds', 'sounds'), ('mobilenet.caffemodel', '.'), ('deploy.prototxt', '.'), ('yolov5n.onnx', '.')],
-    hiddenimports=[],
+    binaries=[(str(ffmpeg_dir / name), '.') for name in ('ffmpeg.exe', 'ffplay.exe', 'ffprobe.exe')],
+    datas=[('assets', 'assets'), ('sounds', 'sounds'), ('mobilenet.caffemodel', '.'), ('deploy.prototxt', '.'), ('yolov5n.onnx', '.')],
+    hiddenimports=['cctv_server', 'core.diagnostics', 'qrcode.image.pil'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

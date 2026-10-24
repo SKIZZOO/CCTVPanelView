@@ -13,6 +13,7 @@ else:
     BUNDLE_DIR = EXE_DIR
 
 BASE_DIR = BUNDLE_DIR
+os.environ["PATH"] = BUNDLE_DIR + os.pathsep + os.environ.get("PATH", "")
 os.chdir(EXE_DIR)
 if BUNDLE_DIR not in sys.path:
     sys.path.insert(0, BUNDLE_DIR)
@@ -185,6 +186,9 @@ def check_single_instance() -> bool:
 
 
 def main():
+    if "--self-test" in sys.argv:
+        from core.diagnostics import run_self_test
+        raise SystemExit(run_self_test(sys.argv))
     # Install global exception hooks
     sys.excepthook = global_excepthook
     if hasattr(threading, "excepthook"):
@@ -199,6 +203,10 @@ def main():
         print("[Startup] CCTVPanelView is already running. Bringing existing window to foreground.")
         activate_existing_window()
         sys.exit(0)
+
+    if "--headless" in sys.argv:
+        from cctv_server import main as headless_main
+        return headless_main()
 
     # Enable High DPI scaling
     if hasattr(Qt.ApplicationAttribute, 'AA_EnableHighDpiScaling'):

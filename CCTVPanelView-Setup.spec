@@ -1,11 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
+from pathlib import Path
+dist_dir = Path(os.environ['CCTVPANELVIEW_DIST_DIR'])
 
 
 a = Analysis(
     ['installer.py'],
     pathex=[],
     binaries=[],
-    datas=[('assets', 'assets'), ('core', 'core'), ('ui', 'ui'), ('sounds', 'sounds'), ('main.py', '.'), ('cctv_server.py', '.'), ('CCTVPanelView.exe', '.'), ('CCTVPanelView-Uninstall.exe', '.'), ('uninstaller.py', '.'), ('mobilenet.caffemodel', '.'), ('deploy.prototxt', '.'), ('yolov5n.onnx', '.')],
+    datas=[('assets', 'assets'), (str(dist_dir / 'CCTVPanelView.exe'), '.'), (str(dist_dir / 'CCTVPanelView-Uninstall.exe'), '.')],
     hiddenimports=['winreg'],
     hookspath=[],
     hooksconfig={},

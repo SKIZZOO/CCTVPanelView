@@ -5,6 +5,7 @@ import time
 import subprocess
 import threading
 import queue
+import collections
 import re
 import uuid
 from datetime import datetime
@@ -116,7 +117,9 @@ class AlertClipSession:
         self.trigger_frame = trigger_frame
 
         # Bounded queue strictly limited to 45 frames to eliminate massive RAM consumption
-        self.queue = queue.Queue(maxsize=45)
+        frame_bytes = int(trigger_frame.nbytes) if trigger_frame is not None else 1920 * 1080 * 3
+        self.queue = queue.Queue(maxsize=max(1, min(45, (32 * 1024 * 1024) // max(1, frame_bytes * 2))))
+        self.prebuffer = collections.deque()
         self.active = True
         self.frame_count = 0
         self.start_time = time.time()
@@ -152,6 +155,14 @@ class AlertClipSession:
                 self.queue.put_nowait((None, None))
             except Exception:
                 pass
+
+    def set_prebuffer(self, frames):
+        """Keep compressed frames compressed until encoding; preserve their 10 Hz timing."""
+        output = []
+        for index, (data, stamp) in enumerate(frames):
+            copies = max(1, round((index + 1) * self.fps / 10) - round(index * self.fps / 10))
+            output.extend([data] * copies)
+        self.prebuffer.extend(output)
 
     def push_frame(self, raw_frame: np.ndarray, highlighted_frame: np.ndarray, has_activity: bool = True):
         if not self.active:
@@ -271,7 +282,14 @@ class AlertClipSession:
     def _worker(self):
         while self.active or not self.queue.empty():
             try:
-                item = self.queue.get(timeout=0.1)
+                if self.prebuffer:
+                    data = self.prebuffer.popleft()
+                    decoded = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
+                    if decoded is None:
+                        continue
+                    item = (decoded, decoded)
+                else:
+                    item = self.queue.get(timeout=0.1)
                 if item is None or (isinstance(item, tuple) and item[0] is None):
                     self.active = False
                     break
@@ -1342,6 +1360,8 @@ class AlertManager(QObject):
         - Standardized naming format: TAG_LENS_CAMERA_WHAT IT FOUND_ DATE _ TIME _ID
         - Notifies UI with alert payload including short description.
         """
+        if not self.app_settings.get("master_alerts_enabled", True):
+            return {}
         now = datetime.now()
         time_display = now.strftime("%H:%M:%S")
 
