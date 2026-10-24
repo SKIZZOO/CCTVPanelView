@@ -1,0 +1,57 @@
+{
+  "version": "2.0",
+  "app_settings": {
+    "default_layout": "2x2",
+    "default_quality": "MAX",
+    "hardware_acceleration": true,
+    "low_latency_mode": true,
+    "motion_enabled": true,
+    "ai_detection_enabled": true,
+    "notify_person": true,
+    "notify_vehicle": true,
+    "notify_animal": true,
+    "notify_motion": true,
+    "sound_alarms_enabled": true,
+    "theme": "Slate Modern",
+    "has_completed_onboarding": false,
+    "recording_dir": "recordings",
+    "snapshot_dir": "snapshots",
+    "ntfy_topic": "",
+    "ntfy_enabled": false,
+    "telegram_enabled": false,
+    "discord_enabled": false,
+    "close_action": "ask",
+    "performance_profile": "balanced",
+    "session_slot_assignments": {
+      "0": "",
+      "1": "",
+      "2": "",
+      "3": ""
+    },
+    "master_alerts_enabled": true,
+    "show_desktop_notifications": true,
+    "auto_record_on_motion": true,
+    "motion_min_area": 2800,
+    "motion_confirm_delay": 1.2,
+    "motion_foliage_filter": true,
+    "motion_cooldown_sec": 5.0,
+    "ai_conf_threshold": 0.38,
+    "vehicle_conf_threshold": 0.38
+  },
+  "cameras": [
+    {
+      "id": "cam_example_1",
+      "name": "Front Yard (Dual-Lens)",
+      "ip": "192.168.1.100",
+      "rtsp_port": 554,
+      "onvif_port": 8899,
+      "username": "admin",
+      "password": "",
+      "primary_stream": "/live/ch00_0",
+      "secondary_stream": "/live/ch01_0",
+      "dual_lens": true,
+      "motion_enabled": true,
+      "ai_enabled": true
+    }
+  ]
+}
