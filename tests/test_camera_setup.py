@@ -71,13 +71,22 @@ class CameraSetupTests(unittest.TestCase):
         camera = self.manager.get_cameras()[0]
         camera["configured"] = False
         camera["password"] = ""
-        def complete(**kwargs):
-            camera["configured"] = True
-            self.manager.save_config()
-        with patch("ui.main_window.CameraSetupPromptDialog.exec", return_value=QDialog.DialogCode.Accepted), \
-             patch.object(self.window, "open_settings_dialog", side_effect=complete):
+        errors = []
+        def complete_settings():
+            dialog = QApplication.activeModalWidget()
+            try:
+                dialog.txt_cam_pass.setText("fixture")
+                dialog._save_settings()
+            except Exception as error:
+                errors.append(error)
+                dialog.reject()
+        QTimer.singleShot(0, complete_settings)
+        with patch("ui.main_window.CameraSetupPromptDialog.exec", return_value=QDialog.DialogCode.Accepted):
             self.window._prompt_unconfigured_camera(camera, target_tile_idx=2)
-        self.assertEqual("s1", self.window.video_tiles[2].stream_id)
+        self.assertEqual([], errors)
+        configured = self.manager.get_camera_by_id("c1")
+        self.assertTrue(configured["configured"])
+        self.assertEqual(configured["streams"][0]["id"], self.window.video_tiles[2].stream_id)
         self.assertFalse(self.window._in_prompt_unconfigured)
 
     def test_failed_save_reports_error_instead_of_silent_success(self):
