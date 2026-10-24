@@ -2,6 +2,8 @@ import json
 import os
 import sys
 import socket
+import tempfile
+import uuid
 import cv2
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Any, Optional
@@ -82,12 +84,24 @@ class DeviceManager:
             self.save_config()
 
     def save_config(self):
+        temp_path = None
         try:
-            os.makedirs(os.path.dirname(os.path.abspath(self.config_file)), exist_ok=True)
-            with open(self.config_file, "w", encoding="utf-8") as f:
+            folder = os.path.dirname(os.path.abspath(self.config_file))
+            os.makedirs(folder, exist_ok=True)
+            # Write beside the destination so replacement stays on the same volume.
+            # Serialization or disk failures leave the previous configuration intact.
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=folder,
+                                             prefix=".camera-config-", suffix=".tmp", delete=False) as f:
+                temp_path = f.name
                 json.dump(self.config, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, self.config_file)
         except Exception as e:
             print(f"Failed to save config: {e}")
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                os.remove(temp_path)
 
     def get_cameras(self) -> List[Dict[str, Any]]:
         return self.config.get("cameras", [])
@@ -157,7 +171,7 @@ class DeviceManager:
         cameras = self.config.setdefault("cameras", [])
         # Generate ID if missing
         if "id" not in camera_data or not camera_data["id"]:
-            camera_data["id"] = f"cam_{len(cameras) + 1}_{int(socket.gettimeoffset() if hasattr(socket, 'gettimeoffset') else 0)}"
+            camera_data["id"] = f"cam_{uuid.uuid4().hex}"
         cameras.append(camera_data)
         self.save_config()
 

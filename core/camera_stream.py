@@ -195,6 +195,9 @@ class CameraStreamWorker(QThread):
         # Mobile Web Streaming Cache & Real-Time Frame Access
         self._latest_bgr_frame: Optional[np.ndarray] = None
         self._latest_raw_bgr_frame: Optional[np.ndarray] = None
+        self._jpeg_lock = threading.Lock()
+        self._latest_jpeg_quality = None
+        self._latest_raw_jpeg_quality = None
         self._latest_jpeg_cache: Optional[bytes] = None
         self._latest_jpeg_time: float = 0.0
         self._latest_raw_jpeg_cache: Optional[bytes] = None
@@ -359,37 +362,30 @@ class CameraStreamWorker(QThread):
         return None
 
     def get_latest_jpeg(self, quality: int = 65, raw: bool = False) -> Optional[bytes]:
-        """Returns the most recent frame encoded as JPEG bytes with caching.
-        If raw=True, encodes the pristine unannotated raw stream.
-        """
-        frame = self._latest_raw_bgr_frame if raw else self._latest_bgr_frame
-        if frame is None:
-            # Fallback to whichever frame buffer is currently available
-            frame = self._latest_bgr_frame if raw else self._latest_raw_bgr_frame
-        if frame is None:
-            return None
-        now = time.time()
-        # Fast cache hit within 30ms to prevent duplicate encodings across concurrent clients
-        if raw:
-            if self._latest_raw_jpeg_cache is not None and (now - self._latest_raw_jpeg_time) < 0.030:
-                return self._latest_raw_jpeg_cache
-        else:
-            if self._latest_jpeg_cache is not None and (now - self._latest_jpeg_time) < 0.030:
-                return self._latest_jpeg_cache
-
-        try:
-            ret, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
-            if ret:
-                encoded = buf.tobytes()
-                if raw:
-                    self._latest_raw_jpeg_cache = encoded
-                    self._latest_raw_jpeg_time = now
-                else:
-                    self._latest_jpeg_cache = encoded
-                    self._latest_jpeg_time = now
-                return encoded
-        except Exception:
-            pass
+        """Share JPEG work across viewers while respecting their requested quality."""
+        quality = max(20, min(95, int(quality)))
+        # Only HTTP viewers acquire this lock; capture/display never wait for encoding.
+        with self._jpeg_lock:
+            frame = self._latest_raw_bgr_frame if raw else self._latest_bgr_frame
+            if frame is None:
+                frame = self._latest_bgr_frame if raw else self._latest_raw_bgr_frame
+            if frame is None:
+                return None
+            prefix = "_latest_raw_jpeg" if raw else "_latest_jpeg"
+            cached = getattr(self, prefix + "_cache")
+            if (cached is not None and getattr(self, prefix + "_quality") == quality
+                    and time.monotonic() - getattr(self, prefix + "_time") < 0.030):
+                return cached
+            try:
+                ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+                if ok:
+                    encoded = buf.tobytes()
+                    setattr(self, prefix + "_cache", encoded)
+                    setattr(self, prefix + "_quality", quality)
+                    setattr(self, prefix + "_time", time.monotonic())
+                    return encoded
+            except Exception:
+                pass
         return None
 
     @staticmethod

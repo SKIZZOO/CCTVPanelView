@@ -200,7 +200,7 @@ Open the Settings Center by clicking the **Gear** icon on the top navigation bar
 
 CCTVPanelView includes a built-in web server and Progressive Web App (PWA) hub for monitoring your cameras remotely from any smartphone, tablet, or web browser on your LAN:
 
-- **Instant Access**: Open `http://YOUR_PC_IP:8080` or scan the dynamic QR code generated in Settings.
+- **Protected Access**: Open **More → Mobile access** and copy or scan the complete per-launch access link. The link contains a private access code and expires when the server restarts. A bare address prompts for that code. Use a trusted LAN/VPN or HTTPS reverse proxy for remote access.
 - **Mobile PWA Support**: Add to home screen on iOS and Android for a native app experience.
 - **Interactive Controls**: Switch between camera channels, view real-time incident cards, and operate PTZ cameras remotely.
 
@@ -327,3 +327,8 @@ Special thanks to the open-source community behind **PyQt6**, **OpenCV**, and **
 
 This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
 All rights reserved © 2026 **SKIZZOO**.
+
+
+## Validation and security review
+
+Run `python -m unittest discover -s tests -v` after installing requirements. See [the review](docs/REVIEW-2026-10-24.md) for changes, compatibility notes, test evidence, and remaining work.

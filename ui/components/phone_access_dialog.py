@@ -83,7 +83,7 @@ class PhoneAccessDialog(QDialog):
 
         self.lan_ip = self.web_server.lan_ip if self.web_server else "127.0.0.1"
         self.port = self.web_server.port if self.web_server else 8080
-        self.local_url = f"http://{self.lan_ip}:{self.port}"
+        self.local_url = self.web_server.get_local_url() if self.web_server else ""
         self.tailscale_ip = get_tailscale_ip()
 
         self.setWindowTitle("CCTVPanelView - Mobile Phone Access & Notifications")
@@ -1142,7 +1142,7 @@ class PhoneAccessDialog(QDialog):
         pf_layout.setSpacing(8)
 
         pf_head = QHBoxLayout()
-        lbl_pf_title = QLabel("METHOD #3: ROUTER PORT FORWARDING (CLASSIC)", pf_card)
+        lbl_pf_title = QLabel("REMOTE ACCESS: TRANSPORT SECURITY", pf_card)
         lbl_pf_title.setStyleSheet("font-size: 11px; font-weight: 800; color: #f59e0b; letter-spacing: 0.5px; border: none; background: transparent;")
         pf_head.addWidget(lbl_pf_title)
         pf_head.addStretch()
@@ -1153,8 +1153,8 @@ class PhoneAccessDialog(QDialog):
         pf_layout.addLayout(pf_head)
 
         lbl_pf_desc = QLabel(
-            f"If your home ISP provides a dedicated public IPv4 address, forward <b>External Port 8080</b> (TCP) to <b>PC IP: {self.lan_ip}</b> on Internal Port 8080. "
-            f"Access remotely via <code>http://[ROUTER-PUBLIC-IP]:8080</code>.",
+            "Use a VPN or an HTTPS reverse proxy for remote viewing. Open the remote address and paste the "
+            "access code from the local link when prompted. Keep the embedded HTTP server on your trusted network.",
             pf_card
         )
         lbl_pf_desc.setWordWrap(True)

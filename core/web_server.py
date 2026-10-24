@@ -5,6 +5,10 @@ import time
 import json
 import socket
 import threading
+import secrets
+import hmac
+import math
+from http.cookies import SimpleCookie
 import urllib.parse
 from datetime import datetime
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -1073,6 +1077,16 @@ WORKSTATION_WEB_APP_HTML = """<!DOCTYPE html>
 
         .toast-title { font-size: 11px; font-weight: 700; color: #f87171; }
         .toast-body { font-size: 12px; font-weight: 600; color: #ffffff; }
+        #topBar { height: auto; min-height: 58px; padding: 10px 14px; flex-wrap: wrap; }
+        #workspace { min-height: 0; height: auto; }
+        .top-action-group { flex-wrap: wrap; }
+        .top-btn:focus-visible, .layout-btn:focus-visible { outline: 2px solid var(--accent-cyan); outline-offset: 3px; }
+        @media (max-width: 760px) {
+            #topBar { gap: 8px; padding: 8px; }
+            .brand-title { font-size: 12px; }
+            .top-action-group { width: 100%; gap: 4px; }
+            .top-btn { padding: 7px; }
+        }
     </style>
 </head>
 <body>
@@ -1361,6 +1375,22 @@ WORKSTATION_WEB_APP_HTML = """<!DOCTYPE html>
         let activePlayerAlert = null;
         let ptzCamIp = '';
 
+        // Escape every dynamic HTML value, including attribute delimiters.
+        // Nested markup must also use html``; event arguments use JSON strings.
+        class SafeMarkup {
+            constructor(markup) { this.markup = markup; }
+            toString() { return this.markup; }
+        }
+        function html(parts, ...values) {
+            const escape = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+            const markup = parts.reduce((out, part, i) => out + part + (i < values.length ? (values[i] instanceof SafeMarkup ? values[i].markup : escape(values[i])) : ''), '');
+            return new SafeMarkup(markup);
+        }
+        function jsArg(value) { return JSON.stringify(String(value ?? '')); }
+        function mediaUrl(value) {
+            return typeof value === 'string' && value.startsWith('/') && !value.startsWith('//') && !value.includes(String.fromCharCode(92)) ? value : '';
+        }
+
         // Layout definitions
         function setLayout(mode) {
             currentLayout = mode;
@@ -1447,19 +1477,43 @@ WORKSTATION_WEB_APP_HTML = """<!DOCTYPE html>
             ptzCamIp = document.getElementById('ptzCamSelect').value;
         }
 
+        const hiddenStreams = new Set();
         // Render Center Video Grid
         function renderGrid() {
             const grid = document.getElementById('videoGrid');
-            grid.innerHTML = '';
-
+            let visibleCameras = cameras.filter(c => !hiddenStreams.has(c.id));
+            if (currentLayout === '1x1' && selectedCamId) {
+                visibleCameras = visibleCameras.filter(c => c.id === selectedCamId);
+            }
             let maxTiles = 4;
             if (currentLayout === '1x1') maxTiles = 1;
             else if (currentLayout === '2x2') maxTiles = 4;
             else if (currentLayout === '3x3') maxTiles = 9;
             else if (currentLayout === 'dual') maxTiles = 2;
 
+            const signature = JSON.stringify([currentLayout, visibleCameras.slice(0, maxTiles).map(c => c.id)]);
+            if (grid.dataset.signature === signature) {
+                grid.querySelectorAll('.video-tile').forEach((tile, i) => {
+                    const cam = visibleCameras[i];
+                    tile.classList.toggle('selected', !!cam && cam.id === selectedCamId);
+                    if (!cam) return;
+                    const status = tile.querySelector('.dock-pill');
+                    status.textContent = cam.is_online ? 'LIVE' : 'CONNECTING';
+                    status.className = 'dock-pill ' + (cam.is_online ? 'status-live' : 'status-connecting');
+                    const name = tile.querySelector('.dock-pill.name');
+                    name.textContent = cam.name;
+                    name.title = cam.name;
+                    const rec = tile.querySelector('[data-record]');
+                    rec.textContent = cam.is_recording ? '● ' + formatTime(cam.record_duration || 0) : '● REC';
+                    rec.classList.toggle('rec-active', !!cam.is_recording);
+                    tile.querySelector('.dock-metrics').textContent = `${cam.width || 1920}x${cam.height || 1080} • ${cam.fps || 15}fps`;
+                });
+                return;
+            }
+            grid.dataset.signature = signature;
+            grid.replaceChildren();
             for (let i = 0; i < maxTiles; i++) {
-                const cam = cameras[i] || null;
+                const cam = visibleCameras[i] || null;
                 const tile = document.createElement('div');
                 tile.className = 'video-tile' + (cam && cam.id === selectedCamId ? ' selected' : '');
                 tile.onclick = () => { if (cam) selectCam(cam.id); };
@@ -1467,29 +1521,29 @@ WORKSTATION_WEB_APP_HTML = """<!DOCTYPE html>
                 if (cam) {
                     const isRec = cam.is_recording;
                     const recDur = formatTime(cam.record_duration || 0);
-                    const streamSrc = `/stream/${cam.id}?q=75&fps=15`;
+                    const streamSrc = `/stream/${encodeURIComponent(cam.id)}?q=75&fps=15`;
 
-                    tile.innerHTML = `
-                        <img class="tile-stream-img" id="stream_${cam.id}" src="${streamSrc}" alt="" onerror="onTileStreamErr('${cam.id}')" />
+                    tile.innerHTML = html`
+                        <img class="tile-stream-img" id="stream_${cam.id}" src="${streamSrc}" alt="" onerror="onTileStreamErr(${jsArg(cam.id)})" />
                         
                         <!-- Centered Bottom Control Dock (1:1 with PC VideoTile) -->
                         <div class="tile-control-dock" onclick="event.stopPropagation()">
                             <span class="dock-pill ${cam.is_online ? 'status-live' : 'status-connecting'}">${cam.is_online ? 'LIVE' : 'CONNECTING'}</span>
                             <span class="dock-pill name" title="${cam.name}">${cam.name}</span>
                             <span class="dock-badge-motion" id="motion_${cam.id}">MOTION</span>
-                            <span class="dock-badge-signal">52%</span>
-                            <button class="dock-btn" onclick="toggleColorTile('${cam.id}')">Color</button>
-                            <button class="dock-btn" onclick="toggleAudioTile('${cam.id}')">Audio</button>
-                            <button class="dock-btn" onclick="toggleQualityTile('${cam.id}')">LOW</button>
+
+                            <button class="dock-btn" onclick="toggleColorTile(${jsArg(cam.id)})">Color</button>
+                            <button class="dock-btn" onclick="toggleAudioTile(${jsArg(cam.id)})">Audio</button>
+                            <button class="dock-btn" onclick="toggleQualityTile(${jsArg(cam.id)})">LOW</button>
                             <span class="dock-metrics">${cam.width || 1920}x${cam.height || 1080} • ${cam.fps || 15}fps</span>
-                            <button class="dock-btn" onclick="takeSnapshotTile('${cam.id}')">📸</button>
-                            <button class="dock-btn ${isRec ? 'rec-active' : ''}" onclick="toggleRecTile('${cam.id}')">${isRec ? '● ' + recDur : '● REC'}</button>
-                            <button class="dock-btn" onclick="soloTile('${cam.id}')">[ ]</button>
-                            <button class="dock-btn" onclick="closeTile('${cam.id}')">X</button>
+                            <button class="dock-btn" onclick="takeSnapshotTile(${jsArg(cam.id)})">📸</button>
+                            <button data-record class="dock-btn ${isRec ? 'rec-active' : ''}" onclick="toggleRecTile(${jsArg(cam.id)})">${isRec ? '● ' + recDur : '● REC'}</button>
+                            <button class="dock-btn" onclick="soloTile(${jsArg(cam.id)})">[ ]</button>
+                            <button class="dock-btn" onclick="closeTile(${jsArg(cam.id)})">X</button>
                         </div>
                     `;
                 } else {
-                    tile.innerHTML = `
+                    tile.innerHTML = html`
                         <span class="tile-connecting-text">No Camera Assigned</span>
                     `;
                 }
@@ -1499,6 +1553,7 @@ WORKSTATION_WEB_APP_HTML = """<!DOCTYPE html>
 
         function selectCam(id) {
             selectedCamId = id;
+            hiddenStreams.delete(id);
             document.querySelectorAll('.video-tile').forEach(t => t.classList.remove('selected'));
             renderGrid();
         }
@@ -1517,7 +1572,7 @@ WORKSTATION_WEB_APP_HTML = """<!DOCTYPE html>
                 const card = document.createElement('div');
                 card.className = 'cam-channel-card';
                 card.onclick = () => selectCam(c.id);
-                card.innerHTML = `
+                card.innerHTML = html`
                     <div class="cam-channel-row1">
                         <span class="cam-ch-name">${c.name}</span>
                         <span class="cam-status-dot ${c.is_online ? '' : 'offline'}"></span>
@@ -1528,9 +1583,9 @@ WORKSTATION_WEB_APP_HTML = """<!DOCTYPE html>
                         <span>${c.fps || 15} FPS</span>
                     </div>
                     <div class="cam-ch-btns" onclick="event.stopPropagation()">
-                        <button class="cam-mini-btn" onclick="soloTile('${c.id}')">Solo</button>
-                        <button class="cam-mini-btn" onclick="takeSnapshotTile('${c.id}')">Snap</button>
-                        <button class="cam-mini-btn" onclick="toggleRecTile('${c.id}')">${c.is_recording ? 'Stop REC' : 'REC'}</button>
+                        <button class="cam-mini-btn" onclick="soloTile(${jsArg(c.id)})">Solo</button>
+                        <button class="cam-mini-btn" onclick="takeSnapshotTile(${jsArg(c.id)})">Snap</button>
+                        <button class="cam-mini-btn" onclick="toggleRecTile(${jsArg(c.id)})">${c.is_recording ? 'Stop REC' : 'REC'}</button>
                     </div>
                 `;
                 list.appendChild(card);
@@ -1567,28 +1622,28 @@ WORKSTATION_WEB_APP_HTML = """<!DOCTYPE html>
                 const card = document.createElement('div');
                 card.className = `alert-card ${isPerson ? 'alarm-person' : ''}`;
 
-                const snapUrl = a.snapshot_url || (a.unique_id ? `/api/alert_image/${a.unique_id}` : '/assets/app_icon.png');
-                const vidUrl = a.video_url || (a.unique_id ? `/api/alert_video/${a.unique_id}` : '');
+                const snapUrl = mediaUrl(a.snapshot_url) || (a.unique_id ? `/api/alert_image/${encodeURIComponent(a.unique_id)}` : '/assets/app_icon.png');
+                const vidUrl = mediaUrl(a.video_url) || (a.unique_id ? `/api/alert_video/${encodeURIComponent(a.unique_id)}` : '');
 
-                card.innerHTML = `
+                card.innerHTML = html`
                     <div class="alert-card-row1">
                         <span class="alert-type-pill ${tagColor}">● ${a.label || 'ALERT'} (${Math.round((a.confidence || 0.85) * 100)}%)</span>
                         <span class="alert-lens-badge">${a.lens || 'L1'}</span>
                         <span class="alert-time">${a.time_short || (a.timestamp ? a.timestamp.split(' ')[1] : '')}</span>
-                        <button class="alert-dismiss-btn" onclick="dismissAlert('${a.id}')">✕</button>
+                        <button class="alert-dismiss-btn" onclick="dismissAlert(${jsArg(a.id)})">✕</button>
                     </div>
-                    ${a.trigger_reason ? `<div class="alert-trigger-banner">Trigger: ${a.trigger_reason}</div>` : ''}
+                    ${a.trigger_reason ? html`<div class="alert-trigger-banner">Trigger: ${a.trigger_reason}</div>` : ''}
                     <div class="alert-desc-text">${a.description || a.camera_name + ' activity recorded'}</div>
                     <div class="alert-media-row">
-                        <img class="alert-thumb-img" src="${snapUrl}" alt="Snap" onclick="openSnapshotUrl('${snapUrl}')" />
+                        <img class="alert-thumb-img" src="${snapUrl}" alt="Snap" onclick="openSnapshotUrl(${jsArg(snapUrl)})" />
                         <div class="alert-media-info">
                             <span class="alert-cam-name">${a.camera_name || 'Camera'}</span>
                             <span class="alert-clip-badge">Video Clip Available</span>
                         </div>
                     </div>
                     <div class="alert-card-actions">
-                        <button class="alert-btn-play" onclick="openPlayerModal('${a.id}')">Play Clip</button>
-                        <button class="alert-btn-snap" onclick="openSnapshotUrl('${snapUrl}')">Snapshot</button>
+                        <button class="alert-btn-play" onclick="openPlayerModal(${jsArg(a.id)})">Play Clip</button>
+                        <button class="alert-btn-snap" onclick="openSnapshotUrl(${jsArg(snapUrl)})">Snapshot</button>
                     </div>
                 `;
                 container.appendChild(card);
@@ -1605,7 +1660,7 @@ WORKSTATION_WEB_APP_HTML = """<!DOCTYPE html>
             document.getElementById('playerModalCam').innerText = `${alertObj.camera_name} • ${alertObj.lens || 'Main Stream'}`;
             document.getElementById('playerModalBadge').innerText = `${alertObj.label} (${Math.round((alertObj.confidence || 0.85) * 100)}%)`;
 
-            const vidUrl = alertObj.video_url || `/api/alert_video/${alertObj.unique_id}`;
+            const vidUrl = mediaUrl(alertObj.video_url) || `/api/alert_video/${encodeURIComponent(alertObj.unique_id)}`;
             const videoEl = document.getElementById('playerVideoEl');
             videoEl.src = vidUrl;
             videoEl.onplay = updatePlayerInfoFrame;
@@ -1705,7 +1760,7 @@ WORKSTATION_WEB_APP_HTML = """<!DOCTYPE html>
         // Tile Actions
         async function toggleRecTile(streamId) {
             try {
-                const res = await fetch(`/api/record?id=${streamId}&action=toggle`, { method: 'POST' });
+                const res = await fetch(`/api/record?id=${encodeURIComponent(streamId)}&action=toggle`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}' });
                 if (res.ok) {
                     fetchCameras();
                 }
@@ -1715,16 +1770,18 @@ WORKSTATION_WEB_APP_HTML = """<!DOCTYPE html>
         }
 
         function takeSnapshotTile(streamId) {
-            window.open(`/snapshot/${streamId}`, '_blank');
+            window.open(`/snapshot/${encodeURIComponent(streamId)}`, '_blank');
         }
 
         function soloTile(streamId) {
             selectedCamId = streamId;
+            hiddenStreams.delete(streamId);
             setLayout('1x1');
         }
 
         function closeTile(streamId) {
-            fetchCameras();
+            hiddenStreams.add(streamId);
+            renderGrid();
         }
 
         function toggleNightColor() {
@@ -1744,40 +1801,44 @@ WORKSTATION_WEB_APP_HTML = """<!DOCTYPE html>
         }
 
         function toggleAudioTile(id) {
-            alert(`Audio listening toggled for channel ${id}`);
+            alert('Audio listening is available in the desktop application.');
         }
 
         function toggleQualityTile(id) {
-            alert(`Quality switched for ${id}: Toggled between 2K Ultra and Sub-stream`);
+            const img = document.getElementById(`stream_${id}`);
+            if (!img) return;
+            const low = img.dataset.lowQuality !== 'true';
+            img.dataset.lowQuality = String(low);
+            img.src = `/stream/${encodeURIComponent(id)}?q=${low ? 40 : 85}&fps=${low ? 8 : 15}`;
         }
 
         function onTileStreamErr(id) {
             setTimeout(() => {
                 const img = document.getElementById(`stream_${id}`);
-                if (img) img.src = `/stream/${id}?t=${Date.now()}`;
+                if (img) img.src = `/stream/${encodeURIComponent(id)}?t=${Date.now()}`;
             }, 2000);
         }
 
         async function takeSnapshotAll() {
-            window.open(`/snapshot/${cameras[0] ? cameras[0].id : 'stream1'}`, '_blank');
+            window.open(`/snapshot/${encodeURIComponent(selectedCamId || (cameras[0] ? cameras[0].id : 'stream1'))}`, '_blank');
         }
 
         async function clearAllAlerts() {
             if (confirm('Clear all displayed incident alerts from history?')) {
-                await fetch('/api/clear_alerts', { method: 'POST' });
+                await fetch('/api/clear_alerts', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}' });
                 fetchAlerts();
             }
         }
 
         function clean30d() {
-            alert('Retention policy enforced: Archived events older than 30 days cleaned.');
+            alert('Manage recording retention in the desktop application.');
         }
 
         // PTZ Commands
         async function sendPTZ(action) {
             if (!ptzCamIp && cameras.length > 0) ptzCamIp = cameras[0].camera_ip || cameras[0].id;
             try {
-                await fetch(`/api/ptz?camera=${encodeURIComponent(ptzCamIp)}&action=${action}&speed=5`, { method: 'POST' });
+                await fetch(`/api/ptz?camera=${encodeURIComponent(ptzCamIp)}&action=${action}&speed=5`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}' });
             } catch (e) {
                 console.error('PTZ send err:', e);
             }
@@ -1807,14 +1868,14 @@ WORKSTATION_WEB_APP_HTML = """<!DOCTYPE html>
                         item.style.flexDirection = 'row';
                         item.style.justifyContent = 'space-between';
                         item.style.alignItems = 'center';
-                        item.innerHTML = `
+                        item.innerHTML = html`
                             <div>
                                 <span style="font-size:11px; font-weight:700; color:#fff;">${r.name}</span>
                                 <span style="font-size:10px; color:#94a3b8; display:block;">${r.date || ''} • ${r.size_mb || 0} MB</span>
                             </div>
                             <div style="display:flex; gap:6px;">
-                                <a class="top-btn" href="${r.url}" target="_blank" style="text-decoration:none;">Play</a>
-                                <a class="top-btn" href="${r.url}" download style="text-decoration:none;">Download</a>
+                                <a class="top-btn" href="${mediaUrl(r.url)}" target="_blank" style="text-decoration:none;">Play</a>
+                                <a class="top-btn" href="${mediaUrl(r.url)}" download style="text-decoration:none;">Download</a>
                             </div>
                         `;
                         list.appendChild(item);
@@ -1848,7 +1909,18 @@ WORKSTATION_WEB_APP_HTML = """<!DOCTYPE html>
         }
 
         // Initialization
-        window.addEventListener('DOMContentLoaded', () => {
+        window.addEventListener('DOMContentLoaded', async () => {
+            const fragment = new URLSearchParams(location.hash.slice(1));
+            let token = fragment.get('access');
+            history.replaceState(null, '', location.pathname + location.search);
+            if (!token && !(await fetch('/api/session')).ok) {
+                token = prompt('Paste the access code after #access= from the desktop Mobile link.');
+            }
+            if (token) {
+                const login = await fetch('/api/session', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({token})});
+                if (!login.ok) { alert('Access denied. Reopen the link from the desktop Mobile dialog.'); return; }
+            } else if (!(await fetch('/api/session')).ok) { return; }
+
             fetchCameras();
             fetchAlerts();
             updateTelemetry();
@@ -1881,6 +1953,47 @@ class StreamingRequestHandler(BaseHTTPRequestHandler):
         # Suppress routine 200/MJPEG log noise to keep console clean
         return
 
+    def end_headers(self):
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        super().end_headers()
+
+    def _authorized(self):
+        cookie = SimpleCookie()
+        try:
+            cookie.load(self.headers.get("Cookie", ""))
+            supplied = cookie["cctv_session"].value if "cctv_session" in cookie else ""
+            if supplied and hmac.compare_digest(supplied, self.app.access_token):
+                return True
+        except (ValueError, TypeError):
+            pass
+        self.send_error(401, "Open the access link from the desktop Mobile dialog")
+        return False
+
+    def _read_json_body(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if length < 0 or length > 16384:
+                self.send_error(413, "Request body too large")
+                return None
+            data = json.loads(self.rfile.read(length) or b"{}")
+            if not isinstance(data, dict):
+                raise ValueError("Expected an object")
+            return data
+        except (ValueError, UnicodeError):
+            self.send_error(400, "Invalid JSON request")
+            return None
+
+    def _number(self, query, key, default, minimum, maximum, integer=False):
+        try:
+            value = float(query.get(key, [default])[0])
+            if not math.isfinite(value):
+                raise ValueError()
+            return int(max(minimum, min(maximum, value))) if integer else max(minimum, min(maximum, value))
+        except (ValueError, TypeError, OverflowError):
+            return default
+
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
@@ -1896,15 +2009,21 @@ class StreamingRequestHandler(BaseHTTPRequestHandler):
             self._serve_logo()
             return
 
+        if not self._authorized():
+            return
+        if path == "/api/session":
+            self._send_json({"success": True})
+            return
+
         # 2. Live MJPEG Video Stream: /stream/<stream_id>
         if path.startswith("/stream/"):
-            stream_id = path.replace("/stream/", "").strip()
+            stream_id = urllib.parse.unquote(path[len("/stream/"):])
             self._serve_mjpeg_stream(stream_id, query)
             return
 
         # 3. Snapshot: /snapshot/<stream_id>
         if path.startswith("/snapshot/"):
-            stream_id = path.replace("/snapshot/", "").strip()
+            stream_id = urllib.parse.unquote(path[len("/snapshot/"):])
             self._serve_snapshot(stream_id, query)
             return
 
@@ -1932,26 +2051,25 @@ class StreamingRequestHandler(BaseHTTPRequestHandler):
 
         # 5d. Clear Alerts: /api/clear_alerts
         if path == "/api/clear_alerts":
-            ok = self.app.clear_all_alerts()
-            self._send_json({"success": ok})
+            self.send_error(405, "Use POST for changes")
             return
 
         # 6. JSON API: /api/alerts
         if path == "/api/alerts":
-            limit = int(query.get("limit", [50])[0])
+            limit = self._number(query, "limit", 50, 1, 200, integer=True)
             alerts = self.app.get_recent_alerts(limit=limit)
             self._send_json({"alerts": alerts, "total": len(alerts)})
             return
 
         # 7. Alert Snapshot Image: /api/alert_image/<unique_id>
         if path.startswith("/api/alert_image/"):
-            uid = path.replace("/api/alert_image/", "").strip()
+            uid = urllib.parse.unquote(path[len("/api/alert_image/"):])
             self._serve_alert_image(uid)
             return
 
         # 7b. Alert Video Stream: /api/alert_video/<unique_id>
         if path.startswith("/api/alert_video/"):
-            uid = path.replace("/api/alert_video/", "").strip()
+            uid = urllib.parse.unquote(path[len("/api/alert_video/"):])
             self._serve_alert_video(uid)
             return
 
@@ -1959,6 +2077,9 @@ class StreamingRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/record":
             stream_id = query.get("id", [""])[0] or query.get("stream", [""])[0]
             action = query.get("action", ["status"])[0]
+            if action != "status":
+                self.send_error(405, "Use POST for recording changes")
+                return
             success, msg, details = self.app.handle_recording(stream_id, action)
             self._send_json({"success": success, "message": msg, **details})
             return
@@ -1974,58 +2095,55 @@ class StreamingRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
-
-        if path == "/api/clear_alerts":
-            ok = self.app.clear_all_alerts()
-            self._send_json({"success": ok})
+        # JSON-only requests and same-origin cookies prevent cross-site form commands.
+        origin = self.headers.get("Origin")
+        if origin:
+            parsed_origin = urllib.parse.urlsplit(origin)
+            if parsed_origin.scheme not in ("http", "https") or parsed_origin.netloc != self.headers.get("Host"):
+                self.send_error(403, "Cross-origin command rejected")
+                return
+        if self.headers.get_content_type() != "application/json":
+            self.send_error(415, "Use application/json")
             return
-
-        # PTZ Command Dispatch: /api/ptz
-        if path == "/api/ptz":
-            query = urllib.parse.parse_qs(parsed.query)
+        if path != "/api/session" and not self._authorized():
+            return
+        data = self._read_json_body()
+        if data is None:
+            return
+        if path == "/api/session":
+            token = data.get("token", "")
+            if not isinstance(token, str) or not hmac.compare_digest(token.encode("utf-8"), self.app.access_token.encode("ascii")):
+                self.send_error(401, "Invalid access code")
+                return
+            self.send_response(200)
+            secure = "; Secure" if origin and urllib.parse.urlsplit(origin).scheme == "https" else ""
+            self.send_header("Set-Cookie", f"cctv_session={self.app.access_token}; HttpOnly; SameSite=Strict; Path=/{secure}")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        query = urllib.parse.parse_qs(parsed.query)
+        if path == "/api/clear_alerts":
+            self._send_json({"success": self.app.clear_all_alerts()})
+        elif path == "/api/ptz":
             camera_ip = query.get("camera", [""])[0]
             action = query.get("action", [""])[0]
-            speed = int(query.get("speed", [5])[0])
-
+            speed = self._number(query, "speed", 5, 1, 10, integer=True)
             success, msg = self.app.handle_ptz_command(camera_ip, action, speed)
             self._send_json({"success": success, "message": msg, "action": action})
-            return
-
-        # Recording Control (POST): /api/record
-        if path == "/api/record":
-            query = urllib.parse.parse_qs(parsed.query)
-            stream_id = query.get("id", [""])[0] or query.get("stream", [""])[0]
-            action = query.get("action", ["toggle"])[0]
-            if not stream_id:
-                content_len = int(self.headers.get("Content-Length", 0))
-                if content_len > 0:
-                    try:
-                        body_data = json.loads(self.rfile.read(content_len).decode("utf-8"))
-                        stream_id = body_data.get("id", "") or body_data.get("stream", "")
-                        action = body_data.get("action", action)
-                    except Exception:
-                        pass
+        elif path == "/api/record":
+            stream_id = query.get("id", [""])[0] or query.get("stream", [""])[0] or data.get("id", data.get("stream", ""))
+            action = query.get("action", [data.get("action", "toggle")])[0]
+            if not isinstance(stream_id, str) or not isinstance(action, str):
+                self.send_error(400, "Invalid recording command")
+                return
             success, msg, details = self.app.handle_recording(stream_id, action)
             self._send_json({"success": success, "message": msg, **details})
-            return
-
-        # Delete Camera Endpoint: /api/delete_camera
-        if path == "/api/delete_camera":
-            query = urllib.parse.parse_qs(parsed.query)
-            target_id = query.get("id", [""])[0] or query.get("camera_id", [""])[0]
-            if not target_id:
-                content_len = int(self.headers.get("Content-Length", 0))
-                if content_len > 0:
-                    try:
-                        body_data = json.loads(self.rfile.read(content_len).decode("utf-8"))
-                        target_id = body_data.get("id") or body_data.get("camera_id", "")
-                    except Exception:
-                        pass
-            success, msg = self.app.handle_delete_camera(target_id)
-            self._send_json({"success": success, "message": msg, "id": target_id})
-            return
-
-        self.send_error(404, "Not Found")
+        elif path == "/api/delete_camera":
+            # Desktop configuration changes must stay on the GUI thread.
+            self.send_error(403, "Remove cameras from the desktop application")
+        else:
+            self.send_error(404, "Not Found")
 
     def _serve_mobile_app(self):
         body = MOBILE_WEB_APP_HTML.encode("utf-8")
@@ -2033,8 +2151,6 @@ class StreamingRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("X-Frame-Options", "SAMEORIGIN")
-        self.send_header("X-XSS-Protection", "1; mode=block")
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.end_headers()
         self.wfile.write(body)
@@ -2045,17 +2161,12 @@ class StreamingRequestHandler(BaseHTTPRequestHandler):
             self.send_error(404, f"Camera stream '{stream_id}' not found or offline")
             return
 
-        # Notify worker that a client is actively viewing to prevent frame decimation
-        if hasattr(worker, "set_web_streaming_active"):
-            worker.set_web_streaming_active(True)
-        self.app.increment_client_count(stream_id)
-
-        quality = int(query.get("q", [65])[0])
-        quality = max(20, min(95, quality))
-        fps_limit = float(query.get("fps", [15.0])[0])
+        quality = self._number(query, "q", 65, 20, 95, integer=True)
+        fps_limit = self._number(query, "fps", 15.0, 1.0, 30.0)
         frame_interval = 1.0 / max(1.0, min(30.0, fps_limit))
         is_raw = query.get("raw", ["0"])[0].lower() in ("1", "true", "yes") or query.get("view", [""])[0].lower() == "raw"
 
+        self.app.increment_client_count(stream_id)
         try:
             self.send_response(200)
             self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
@@ -2109,7 +2220,7 @@ class StreamingRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(jpeg)))
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-        self.send_header("Content-Disposition", f'inline; filename="snapshot_{stream_id}.jpg"')
+        self.send_header("Content-Disposition", 'inline; filename="snapshot.jpg"')
         self.end_headers()
         self.wfile.write(jpeg)
 
@@ -2146,39 +2257,70 @@ class StreamingRequestHandler(BaseHTTPRequestHandler):
         }
         self._send_json(status)
 
-    def _serve_recording_file(self, filename: str):
-        if not filename or ".." in filename or "/" in filename or "\\" in filename:
-            self.send_error(400, "Invalid filename")
-            return
-        
-        target_path = None
-        for folder in ["recordings", os.path.join("recordings", "alarms")]:
-            p = os.path.join(folder, filename)
-            if os.path.exists(p) and os.path.isfile(p):
-                target_path = p
-                break
-        
-        if not target_path or not os.path.exists(target_path):
-            self.send_error(404, "Recording file not found")
-            return
-
+    def _serve_video_file(self, target_path):
         try:
-            file_size = os.path.getsize(target_path)
-            self.send_response(200)
-            self.send_header("Content-Type", "video/mp4")
-            self.send_header("Content-Length", str(file_size))
-            self.send_header("Accept-Ranges", "bytes")
-            self.send_header("Content-Disposition", f'inline; filename="{os.path.basename(target_path)}"')
-            self.send_header("Cache-Control", "public, max-age=86400")
-            self.end_headers()
-            with open(target_path, "rb") as f:
-                while True:
-                    chunk = f.read(65536)
+            with open(target_path, "rb") as video:
+                size = os.fstat(video.fileno()).st_size
+                start, end = 0, size - 1
+                requested_range = self.headers.get("Range")
+                if requested_range:
+                    match = re.fullmatch(r"bytes=(\d*)-(\d*)", requested_range.strip())
+                    try:
+                        if not match or not any(match.groups()):
+                            raise ValueError()
+                        first, last = match.groups()
+                        if first:
+                            start = int(first)
+                            end = min(int(last), size - 1) if last else size - 1
+                        else:
+                            length = int(last)
+                            if length <= 0:
+                                raise ValueError()
+                            start = max(0, size - length)
+                        if start > end or start >= size:
+                            raise ValueError()
+                    except ValueError:
+                        self.send_response(416)
+                        self.send_header("Content-Range", f"bytes */{size}")
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                        return
+                self.send_response(206 if requested_range else 200)
+                self.send_header("Content-Type", "video/mp4")
+                self.send_header("Content-Length", str(max(0, end - start + 1)))
+                self.send_header("Accept-Ranges", "bytes")
+                if requested_range:
+                    self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+                filename = urllib.parse.quote(os.path.basename(target_path), safe="")
+                self.send_header("Content-Disposition", f"inline; filename*=UTF-8''{filename}")
+                self.send_header("Cache-Control", "private, no-store")
+                self.end_headers()
+                video.seek(start)
+                remaining = max(0, end - start + 1)
+                while remaining:
+                    chunk = video.read(min(65536, remaining))
                     if not chunk:
                         break
                     self.wfile.write(chunk)
-        except Exception:
+                    remaining -= len(chunk)
+        except (BrokenPipeError, ConnectionError, TimeoutError):
             pass
+        except OSError:
+            self.send_error(404, "Video unavailable")
+
+    def _serve_recording_file(self, filename: str):
+        # Reject drive-relative paths and NTFS streams as well as directory traversal.
+        if (not filename or any(c in filename for c in ("..", "/", "\\", ":"))
+                or not filename.lower().endswith(".mp4")):
+            self.send_error(400, "Invalid recording filename")
+            return
+        for folder in ["recordings", os.path.join("recordings", "alarms")]:
+            base = os.path.realpath(folder)
+            candidate = os.path.realpath(os.path.join(base, filename))
+            if os.path.commonpath([base, candidate]) == base and os.path.isfile(candidate):
+                self._serve_video_file(candidate)
+                return
+        self.send_error(404, "Recording file not found")
 
     def _serve_alert_image(self, unique_id: str):
         mgr = getattr(self.app.main_window, "alert_manager", None)
@@ -2209,7 +2351,7 @@ class StreamingRequestHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "image/jpeg")
             self.send_header("Content-Length", str(len(data)))
-            self.send_header("Cache-Control", "public, max-age=86400")
+            self.send_header("Cache-Control", "private, no-store")
             self.end_headers()
             self.wfile.write(data)
         except Exception as e:
@@ -2245,33 +2387,17 @@ class StreamingRequestHandler(BaseHTTPRequestHandler):
             self.send_error(404, "Alert video not found or not finalized yet")
             return
 
-        try:
-            file_size = os.path.getsize(target_path)
-            self.send_response(200)
-            self.send_header("Content-Type", "video/mp4")
-            self.send_header("Content-Length", str(file_size))
-            self.send_header("Accept-Ranges", "bytes")
-            self.send_header("Content-Disposition", f'inline; filename="{os.path.basename(target_path)}"')
-            self.send_header("Cache-Control", "public, max-age=86400")
-            self.end_headers()
-            with open(target_path, "rb") as f:
-                while True:
-                    chunk = f.read(65536)
-                    if not chunk:
-                        break
-                    self.wfile.write(chunk)
-        except Exception:
-            pass
+        self._serve_video_file(target_path)
 
     def _serve_qr_code(self):
-        url = f"http://{self.app.lan_ip}:{self.app.port}"
+        url = self.app.get_local_url()
         png_data = self.app.generate_qr_png_bytes(url)
         if png_data:
             self.send_response(200)
             self.send_header("Content-Type", "image/png")
             self.send_header("Content-Length", str(len(png_data)))
             self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Cache-Control", "public, max-age=3600")
+            self.send_header("Cache-Control", "private, no-store")
             self.end_headers()
             self.wfile.write(png_data)
         else:
@@ -2285,7 +2411,7 @@ class StreamingRequestHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "image/png")
             self.send_header("Content-Length", str(len(data)))
-            self.send_header("Cache-Control", "public, max-age=86400")
+            self.send_header("Cache-Control", "private, no-store")
             self.end_headers()
             self.wfile.write(data)
         else:
@@ -2297,7 +2423,6 @@ class StreamingRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("X-Frame-Options", "SAMEORIGIN")
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.end_headers()
         self.wfile.write(body)
@@ -2306,6 +2431,34 @@ class StreamingRequestHandler(BaseHTTPRequestHandler):
 class ReusableThreadingHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
     daemon_threads = True
+
+    def __init__(self, *args, max_clients=32, **kwargs):
+        self._slots = threading.BoundedSemaphore(max_clients)
+        super().__init__(*args, **kwargs)
+
+    def get_request(self):
+        request, address = super().get_request()
+        request.settimeout(10)
+        return request, address
+
+    def process_request(self, request, client_address):
+        if not self._slots.acquire(blocking=False):
+            try:
+                request.sendall(b"HTTP/1.0 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n")
+            finally:
+                self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
 
 
 class WebStreamingServer:
@@ -2325,6 +2478,7 @@ class WebStreamingServer:
         self.total_clients = 0
         self._lock = threading.Lock()
         self._ptz_controllers: Dict[str, PTZController] = {}
+        self.access_token = secrets.token_urlsafe(32)
 
     def start(self) -> bool:
         """Starts the streaming server in a dedicated background daemon thread."""
@@ -2335,6 +2489,8 @@ class WebStreamingServer:
             StreamingRequestHandler.app_instance = self
             self.httpd = ReusableThreadingHTTPServer(("0.0.0.0", self.port), StreamingRequestHandler)
             self.httpd.app = self  # type: ignore
+            self.port = self.httpd.server_address[1]
+            self.access_token = secrets.token_urlsafe(32)
             self.is_running = True
             self.start_time = time.time()
 
@@ -2373,7 +2529,7 @@ class WebStreamingServer:
         print("[WebStreamingServer] Server stopped cleanly.")
 
     def get_local_url(self) -> str:
-        return f"http://{self.lan_ip}:{self.port}"
+        return f"http://{self.lan_ip}:{self.port}/#access={self.access_token}"
 
     def get_worker_for_stream(self, stream_id: str):
         """Retrieves active CameraStreamWorker from MainWindow."""
@@ -2480,35 +2636,13 @@ class WebStreamingServer:
             }
         return False, f"Unknown action: {action}", {}
 
-    def handle_delete_camera(self, target_id: str) -> Tuple[bool, str]:
-        """
-        Deletes a camera by camera_id or stream_id from the system and saves config.
-        Executes safely on the Qt GUI thread.
-        """
-        if not target_id:
-            return False, "Camera ID is missing"
-        try:
-            cam_id_to_delete = target_id
-            if hasattr(self.main_window, "device_manager"):
-                s = self.main_window.device_manager.get_stream_by_id(target_id)
-                if s and s.get("camera_id"):
-                    cam_id_to_delete = s.get("camera_id")
-
-            if hasattr(self.main_window, "delete_camera_by_id"):
-                from PyQt6.QtCore import QTimer
-                QTimer.singleShot(0, lambda cid=cam_id_to_delete: self.main_window.delete_camera_by_id(cid, prompt_confirm=False))
-                return True, f"Camera {cam_id_to_delete} was removed from the system."
-            elif hasattr(self.main_window, "device_manager"):
-                self.main_window.device_manager.delete_camera(cam_id_to_delete)
-                return True, f"Camera {cam_id_to_delete} removed from configuration."
-        except Exception as e:
-            return False, str(e)
-        return False, "Camera deletion function is not available"
-
     def increment_client_count(self, stream_id: str):
         with self._lock:
             self.active_client_counts[stream_id] = self.active_client_counts.get(stream_id, 0) + 1
             self.total_clients += 1
+            worker = self.get_worker_for_stream(stream_id)
+            if worker and hasattr(worker, "set_web_streaming_active"):
+                worker.set_web_streaming_active(True)
 
     def decrement_client_count(self, stream_id: str):
         with self._lock:

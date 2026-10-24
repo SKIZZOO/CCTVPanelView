@@ -26,7 +26,6 @@ from PyQt6.QtCore import QCoreApplication, QTimer
 from core.device_manager import DeviceManager
 from core.camera_stream import CameraStreamWorker, StreamStatus, QualityMode
 from core.alert_manager import AlertManager
-from core.notification_dispatcher import NotificationDispatcher
 from core.web_server import WebStreamingServer
 from core.resource_manager import get_resource_manager
 
@@ -54,8 +53,12 @@ class CCTVHeadlessServer:
     def __init__(self, config_path: str = "cameras_config.json"):
         self.device_manager = DeviceManager(config_path)
         self.app_settings = self.device_manager.config.get("app_settings", {})
-        self.alert_manager = AlertManager()
-        self.notification_dispatcher = NotificationDispatcher(self.app_settings)
+        self.alert_manager = AlertManager(
+            snapshot_dir=self.app_settings.get("snapshot_dir", "snapshots"),
+            recording_dir=self.app_settings.get("recording_dir", "recordings"),
+        )
+        # AlertManager dispatches both snapshot and completed-video notifications.
+        self.alert_manager.set_app_settings(self.app_settings)
 
         self.active_workers: Dict[str, CameraStreamWorker] = {}
         self.web_server: Optional[WebStreamingServer] = None
@@ -73,16 +76,11 @@ class CCTVHeadlessServer:
         enable_windows_sleep_prevention()
 
         # 2. Start Web Streaming & Dashboard Server
-        web_port = int(self.app_settings.get("web_server_port", 8080))
-        self.web_server = WebStreamingServer(
-            device_manager=self.device_manager,
-            alert_manager=self.alert_manager,
-            active_workers=self.active_workers,
-            port=web_port,
-            app_settings=self.app_settings
-        )
-        self.web_server.start()
-        print(f"[CCTV Server] Web Dashboard active on port {web_port}")
+        web_port = int(self.app_settings.get("web_port", self.app_settings.get("web_server_port", 8080)))
+        self.web_server = WebStreamingServer(self, port=web_port)
+        if self.web_server.start():
+            # Treat this link as a password. It expires when the server restarts.
+            print(f"[CCTV Server] Private dashboard access link: {self.web_server.get_local_url()}")
 
         # 3. Start Camera Streams
         all_streams = self.device_manager.get_all_streams()
@@ -131,34 +129,14 @@ class CCTVHeadlessServer:
             # Quality
             worker.set_quality(QualityMode.ULTRA_2K if not self.app_settings.get("grid_substream", False) else QualityMode.LOW_SD)
 
-            # Connect alert & motion events to phone notification dispatcher
-            worker.motion_event.connect(self._on_motion_alert)
-
             self.active_workers[stream_id] = worker
             worker.start()
             print(f"[CCTV Server] Started 24/7 worker for '{name}' ({stream_id})")
 
         print("-----------------------------------------------------------------")
-        print(f"[CCTV Server] All {len(self.active_workers)} cameras online & recording.")
+        print(f"[CCTV Server] Started {len(self.active_workers)} workers; camera connections are asynchronous.")
         print("[CCTV Server] Press Ctrl+C at any time to stop safely.")
         print("=================================================================")
-
-    def _on_motion_alert(self, alert_data: dict):
-        if not self.app_settings.get("phone_notifications_enabled", True):
-            return
-        stream_id = alert_data.get("stream_id", "unknown")
-        camera_name = alert_data.get("camera_name", "Security Camera")
-        lens_tag = alert_data.get("lens_tag", "")
-        detections = alert_data.get("detections", [])
-        snapshot_frame = alert_data.get("snapshot_frame")
-
-        self.notification_dispatcher.dispatch_alert(
-            stream_id=stream_id,
-            camera_name=camera_name,
-            lens_tag=lens_tag,
-            detections=detections,
-            snapshot_frame=snapshot_frame
-        )
 
     def stop(self):
         if self._is_shutting_down:
@@ -178,6 +156,7 @@ class CCTVHeadlessServer:
             except Exception as e:
                 print(f"[CCTV Server] Warning stopping worker {s_id}: {e}")
 
+        self.alert_manager.flush_and_save_sync()
         restore_windows_sleep()
         print("[CCTV Server] All recordings flushed. Server terminated cleanly.")
 
