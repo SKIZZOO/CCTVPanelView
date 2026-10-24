@@ -1,0 +1,62 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+
+# C extensions
+*.so
+
+# Distribution / packaging
+build/
+dist/
+*.spec.bak
+*.egg-info/
+.eggs/
+
+# Executables & large release bundles (exceeds GitHub 100MB limit - upload to GitHub Releases)
+*.exe
+*.zip
+*.rar
+*.7z
+*.tar.gz
+
+# Media, recordings, snapshots, and event logs
+recordings/
+snapshots/
+logs/
+*.log
+*.mp4
+*.mkv
+*.avi
+*.jpg
+*.jpeg
+!assets/*.png
+!assets/*.ico
+!docs/screenshots/*.png
+
+# Local personal configuration (contains camera credentials)
+cameras_config.json
+*.local.json
+
+# Scratch & temporary development scripts/outputs
+scratch/
+camera73_*
+take_v*.py
+out.txt
+err.log
+test_run.log
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE / Editor configuration
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
