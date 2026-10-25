@@ -6,6 +6,28 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
+
+
+def run_camera_diagnostics(argv):
+    """Explicit read-only camera checks; reports omit URLs and credentials."""
+    from core.device_manager import DeviceManager
+    config = next((a.split("=", 1)[1] for a in argv if a.startswith("--camera-config=")), "cameras_config.json")
+    output = next((a.split("=", 1)[1] for a in argv if a.startswith("--camera-report=")), "camera-diagnostics.json")
+    results = []
+    try:
+        cameras = json.loads(Path(config).read_text(encoding="utf-8")).get("cameras", [])
+        for camera_index, camera in enumerate(cameras):
+            for stream_index, stream in enumerate(camera.get("streams", [])):
+                started = time.monotonic()
+                result = DeviceManager.test_connection(stream.get("url", ""))
+                results.append(dict(camera_index=camera_index, stream_index=stream_index,
+                                    elapsed_sec=round(time.monotonic() - started, 2), **result))
+        report = {"passed": bool(results) and all(r["success"] for r in results), "streams": results}
+    except Exception:
+        report = {"passed": False, "error": "Camera configuration could not be tested.", "streams": results}
+    Path(output).write_text(json.dumps(report, indent=2), encoding="utf-8")
+    return 0 if report["passed"] else 1
 
 
 def run_self_test(argv):

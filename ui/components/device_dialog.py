@@ -3,6 +3,9 @@ import socket
 import uuid
 from typing import Dict, Any, Optional
 
+from core.connection_test import ConnectionTestWorker
+from core.camera_urls import build_rtsp_url, stream_path
+
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLineEdit,
     QSpinBox, QCheckBox, QPushButton, QComboBox, QLabel, QMessageBox,
@@ -55,39 +58,7 @@ def create_dialog_icon(icon_type: str, color: str = "#38bdf8", size: int = 20) -
     return pix
 
 
-class AsyncConnectionTester(QThread):
-    """Background worker for testing RTSP and network connectivity without locking UI."""
-    test_finished = pyqtSignal(bool, str)
-
-    def __init__(self, url: str, ip: str, port: int):
-        super().__init__()
-        self.url = url
-        self.ip = ip
-        self.port = port
-
-    def run(self):
-        # 1. Quick TCP socket probe
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(2.5)
-            err = s.connect_ex((self.ip, self.port))
-            s.close()
-            if err != 0:
-                self.test_finished.emit(False, f"Cannot reach {self.ip}:{self.port} (Port closed or device offline)")
-                return
-        except Exception as e:
-            self.test_finished.emit(False, f"Network error: {str(e)}")
-            return
-
-        # 2. RTSP handshake test via DeviceManager
-        try:
-            res = DeviceManager.test_connection(self.url)
-            if res.get("success"):
-                self.test_finished.emit(True, res.get("message", "Stream active and verified"))
-            else:
-                self.test_finished.emit(False, res.get("error", "RTSP stream handshake failed"))
-        except Exception as e:
-            self.test_finished.emit(False, str(e))
+AsyncConnectionTester = ConnectionTestWorker
 
 
 class DeviceDialog(QDialog):
@@ -624,6 +595,15 @@ class DeviceDialog(QDialog):
         return card
 
     def _populate_initial_data(self):
+        self._loading_connection = True
+        try:
+            self._populate_connection_fields()
+        finally:
+            self._loading_connection = False
+        if not self.txt_stream1_url.text().strip():
+            self._auto_update_urls()
+
+    def _populate_connection_fields(self):
         cam = self.camera_data
         if not cam:
             self.txt_name.setText("New Camera")
@@ -656,16 +636,14 @@ class DeviceDialog(QDialog):
             self.txt_stream1_url.setText(streams[0].get("url", ""))
         elif cam.get("lens1_path"):
             path = cam.get("lens1_path")
-            auth = f"{cam.get('username')}:{cam.get('password')}@" if cam.get("username") and cam.get("password") else ""
-            self.txt_stream1_url.setText(f"rtsp://{auth}{cam.get('ip')}:{cam.get('port', 554)}{path}")
+            self.txt_stream1_url.setText(build_rtsp_url(cam.get("username", ""), cam.get("password", ""), cam.get("ip", ""), cam.get("port", 554), path))
 
         if len(streams) >= 2:
             self.txt_stream2_name.setText(streams[1].get("name", "Lens 2 (Fixed Wide)"))
             self.txt_stream2_url.setText(streams[1].get("url", ""))
         elif cam.get("lens2_path"):
             path = cam.get("lens2_path")
-            auth = f"{cam.get('username')}:{cam.get('password')}@" if cam.get("username") and cam.get("password") else ""
-            self.txt_stream2_url.setText(f"rtsp://{auth}{cam.get('ip')}:{cam.get('port', 554)}{path}")
+            self.txt_stream2_url.setText(build_rtsp_url(cam.get("username", ""), cam.get("password", ""), cam.get("ip", ""), cam.get("port", 554), path))
 
         if not self.txt_stream1_url.text().strip() or (is_dual and not self.txt_stream2_url.text().strip()):
             self._auto_update_urls()
@@ -676,24 +654,28 @@ class DeviceDialog(QDialog):
         if is_dual:
             curr_url = self.txt_stream2_url.text().strip()
             user = self.txt_user.text().strip()
-            pwd = self.txt_pass.text().strip()
+            pwd = self.txt_pass.text()
             if not curr_url or (user and pwd and f"{user}:{pwd}@" not in curr_url):
                 self._auto_update_urls()
 
     def _on_preset_changed(self, idx: int):
+        if getattr(self, "_loading_connection", False):
+            return
         preset = self.cmb_preset.currentText()
         if "Dual-Lens" in preset:
             self.chk_dual.setChecked(True)
         elif "Single Lens" in preset:
             self.chk_dual.setChecked(False)
-        self._auto_update_urls()
+        self._auto_update_urls(reset_paths=True)
 
-    def _auto_update_urls(self):
+    def _auto_update_urls(self, *args, reset_paths=False):
+        if getattr(self, "_loading_connection", False):
+            return
         ip = self.txt_ip.text().strip()
         port = self.spin_port.value()
         user = self.txt_user.text().strip()
-        pwd = self.txt_pass.text().strip()
-        auth = f"{user}:{pwd}@" if user and pwd else ""
+        pwd = self.txt_pass.text()
+
 
         preset = self.cmb_preset.currentText()
         if "Xiongmai" in preset:
@@ -712,31 +694,29 @@ class DeviceDialog(QDialog):
             path1 = "/live/ch00_0"
             path2 = "/live/ch01_0"
 
+        if not reset_paths:
+            path1 = stream_path(self.txt_stream1_url.text().strip(), path1)
+            path2 = stream_path(self.txt_stream2_url.text().strip(), path2)
         if ip:
-            self.txt_stream1_url.setText(f"rtsp://{auth}{ip}:{port}{path1}")
-            self.txt_stream2_url.setText(f"rtsp://{auth}{ip}:{port}{path2}")
+            self.txt_stream1_url.setText(build_rtsp_url(user, pwd, ip, port, path1))
+            self.txt_stream2_url.setText(build_rtsp_url(user, pwd, ip, port, path2))
 
     def _test_connection(self):
         ip = self.txt_ip.text().strip()
         port = self.spin_port.value()
         user = self.txt_user.text().strip() or "admin"
-        pwd = self.txt_pass.text().strip()
+        pwd = self.txt_pass.text()
 
         if not ip:
             self.lbl_test_result.setText("Please enter an IP address first.")
             self.lbl_test_result.setStyleSheet("color: #ef4444; font-size: 11px;")
             return
 
-        curr_url = self.txt_stream1_url.text().strip()
-        auth = f"{user}:{pwd}@" if user and pwd else ""
-        if curr_url.startswith("rtsp://"):
-            after = curr_url[7:]
-            slash_idx = after.find("/")
-            path = after[slash_idx:] if slash_idx != -1 else "/live/ch00_0"
-        else:
-            path = "/live/ch00_0"
-        url = f"rtsp://{auth}{ip}:{port}{path}"
-        self.txt_stream1_url.setText(url)
+        url = self.txt_stream1_url.text().strip()
+        if not url:
+            self._auto_update_urls()
+            url = self.txt_stream1_url.text().strip()
+        self._tested_url = url
 
         self.btn_test.setEnabled(False)
         self.lbl_test_result.setText("Connecting to camera stream...")
@@ -748,6 +728,9 @@ class DeviceDialog(QDialog):
 
     def _on_test_finished(self, success: bool, message: str):
         self.btn_test.setEnabled(True)
+        if self.txt_stream1_url.text().strip() != getattr(self, "_tested_url", ""):
+            self.lbl_test_result.setText("Stream settings changed. Test again to verify the new URL.")
+            return
         if success:
             self.lbl_test_result.setText(f"Connected: {message}")
             self.lbl_test_result.setStyleSheet("color: #10b981; font-weight: 700; font-size: 11px;")
@@ -778,38 +761,30 @@ class DeviceDialog(QDialog):
         url2 = self.txt_stream2_url.text().strip() if is_dual else ""
 
         user = self.txt_user.text().strip() or "admin"
-        pwd = self.txt_pass.text().strip()
+        pwd = self.txt_pass.text()
         port = self.spin_port.value()
-        auth = f"{user}:{pwd}@" if user and pwd else ""
+
         preset = self.cmb_preset.currentText()
 
         # Guarantee valid default RTSP paths if empty
         if not url1:
             path1 = "/live/ch00_0" if "Dual-Lens" in preset or "CAM720" in preset else "/live/ch0"
-            url1 = f"rtsp://{auth}{ip}:{port}{path1}"
+            url1 = build_rtsp_url(user, pwd, ip, port, path1)
             self.txt_stream1_url.setText(url1)
 
         if is_dual and not url2:
             path2 = "/live/ch01_0" if "Dual-Lens" in preset or "CAM720" in preset else "/live/ch1"
-            url2 = f"rtsp://{auth}{ip}:{port}{path2}"
+            url2 = build_rtsp_url(user, pwd, ip, port, path2)
             self.txt_stream2_url.setText(url2)
 
         def extract_path(u: str, default_p: str) -> str:
-            if not u:
-                return default_p
-            if u.startswith("rtsp://"):
-                u = u[7:]
-            s_idx = u.find("/")
-            if s_idx != -1:
-                p = u[s_idx:]
-                return p if p.startswith("/") else f"/{p}"
-            return default_p
+            return stream_path(u, default_p)
 
         path1 = extract_path(url1, "/live/ch00_0")
         path2 = extract_path(url2, "/live/ch01_0")
 
-        url1 = f"rtsp://{auth}{ip}:{port}{path1}"
-        url2 = f"rtsp://{auth}{ip}:{port}{path2}" if is_dual else ""
+        # URL fields are authoritative; preserve custom credentials, scheme and path.
+        url2 = url2 if is_dual else ""
 
         self.txt_stream1_url.setText(url1)
         if is_dual:
@@ -848,6 +823,11 @@ class DeviceDialog(QDialog):
             "streams": streams
         }
         self.accept()
+
+    def done(self, result):
+        if self.test_worker is not None and self.test_worker.isRunning():
+            self.test_worker.cancel()
+        super().done(result)
 
     # Window dragging implementation
     def mousePressEvent(self, event):

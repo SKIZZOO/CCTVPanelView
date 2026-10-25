@@ -314,10 +314,16 @@ class CameraStreamWorker(QThread):
         sharpened = cv2.filter2D(frame, -1, self._clarity_kernel)
         return cv2.LUT(sharpened, self._clarity_lut)
 
+    def has_recent_frame(self, max_age: float = 10.0) -> bool:
+        return (self._running and not self._paused and self.status == StreamStatus.LIVE
+                and 0 <= time.time() - self._last_frame_received_time < max_age)
+
     def is_feed_stalled(self, threshold: float = 6.0) -> bool:
         """Returns True if the stream claims to be LIVE but has not received any frame for threshold seconds."""
         if not self._running or self._paused or self.status != StreamStatus.LIVE:
             return False
+        capture = self._capture
+        threshold = max(threshold, getattr(capture, "read_timeout", 8.0) + 2.0)
         return (time.time() - self._last_frame_received_time) > threshold
 
     def request_reconnect(self, reason: str = ""):

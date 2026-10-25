@@ -190,6 +190,9 @@ def check_single_instance() -> bool:
 
 
 def main():
+    if "--camera-diagnostics" in sys.argv:
+        from core.diagnostics import run_camera_diagnostics
+        raise SystemExit(run_camera_diagnostics(sys.argv))
     if "--self-test" in sys.argv:
         from core.diagnostics import run_self_test
         raise SystemExit(run_self_test(sys.argv))

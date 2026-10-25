@@ -1787,7 +1787,7 @@ class VideoTile(QFrame):
 
     def update_signal_info(self, sig: dict):
         """Updates the live phone-style cellular signal indicator on this video tile."""
-        is_streaming_live = (self.worker is not None and getattr(self.worker, "status", None) == StreamStatus.LIVE) or (self.fps > 0) or (self.current_frame is not None)
+        is_streaming_live = self.worker is not None and self.worker.has_recent_frame()
 
         if not sig or not sig.get("is_online"):
             if is_streaming_live:
@@ -1817,7 +1817,7 @@ class VideoTile(QFrame):
                     padding: 1px 2px;
                 }
             """)
-            self.badge_signal.setToolTip("Signal Offline (0/4 Bars - Connection timed out)")
+            self.badge_signal.setToolTip("Camera endpoint is not reachable; no recent live frames.")
             self.badge_signal.show()
             return
 

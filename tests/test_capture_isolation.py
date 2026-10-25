@@ -35,7 +35,35 @@ def healthy_decoder(url, sender, stop, sequence, open_ms, read_ms, attached):
         sender.close()
 
 
+def delayed_decoder(url, sender, stop, sequence, open_ms, read_ms, attached):
+    sender.send({"stage": "opening"})
+    time.sleep(1.5)
+    sender.send({"stage": "waiting_for_frame"})
+    time.sleep(1.5)
+    healthy_decoder(url, sender, stop, sequence, open_ms, read_ms, attached)
+
+
 class CaptureIsolationTests(unittest.TestCase):
+    def test_open_and_first_keyframe_have_separate_deadlines(self):
+        capture = IsolatedCapture(open_timeout=2.5, read_timeout=2.5, _target=delayed_decoder)
+        try:
+            self.assertTrue(capture.open("delayed-keyframe"), capture.error_code)
+            self.assertTrue(capture.read()[0])
+        finally:
+            capture.release()
+
+    def test_cancellation_callback_interrupts_connection_test(self):
+        cancelled = threading.Event()
+        capture = IsolatedCapture(open_timeout=30, cancelled=cancelled.is_set, _target=stalled_decoder)
+        attempt = threading.Thread(target=capture.open, args=("stuck",))
+        try:
+            attempt.start()
+            time.sleep(.1)
+            cancelled.set()
+            attempt.join(.4)
+            self.assertFalse(attempt.is_alive())
+        finally:
+            capture.release()
     def test_failed_process_start_can_be_cleaned_up(self):
         capture = IsolatedCapture()
         with patch("multiprocessing.process.BaseProcess.start", side_effect=OSError("fixture process limit")):
@@ -79,7 +107,7 @@ class CaptureIsolationTests(unittest.TestCase):
             attempt = threading.Thread(target=lambda: result.append(broken.open(base + "/hang")))
             attempt.start()
             arrivals = []
-            end = time.monotonic() + 2.5
+            end = time.monotonic() + 3.5
             while time.monotonic() < end:
                 self.assertTrue(healthy.read()[0])
                 arrivals.append(time.monotonic())
@@ -161,7 +189,7 @@ class CaptureIsolationTests(unittest.TestCase):
         monitor = SignalMonitor()
         blocked = threading.Event()
         calls = []
-        def probe(ip, timeout):
+        def probe(ip, timeout, port=554):
             calls.append(ip)
             if ip == "bad":
                 blocked.wait(2)

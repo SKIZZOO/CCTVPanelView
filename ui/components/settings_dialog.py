@@ -12,6 +12,9 @@ import os
 import json
 import socket
 from typing import Dict, Any, List, Optional
+from core.connection_test import ConnectionTestWorker
+from core.camera_urls import build_rtsp_url, stream_path
+
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QWidget, QLabel, QPushButton,
     QComboBox, QSlider, QLineEdit, QFileDialog, QScrollArea, QFrame,
@@ -152,40 +155,7 @@ from ui.components.toggle_switch import ToggleSwitch
 from ui.components.device_dialog import create_dialog_icon
 
 
-class AsyncSettingsConnectionTester(QThread):
-    """Background worker for testing RTSP and network connectivity in Settings tab."""
-    test_finished = pyqtSignal(bool, str)
-
-    def __init__(self, url: str, ip: str, port: int):
-        super().__init__()
-        self.url = url
-        self.ip = ip
-        self.port = port
-
-    def run(self):
-        # 1. Quick TCP socket probe
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(2.5)
-            err = s.connect_ex((self.ip, self.port))
-            s.close()
-            if err != 0:
-                self.test_finished.emit(False, f"Cannot reach {self.ip}:{self.port} (Port closed or device offline)")
-                return
-        except Exception as e:
-            self.test_finished.emit(False, f"Network error: {str(e)}")
-            return
-
-        # 2. RTSP handshake test via DeviceManager
-        try:
-            from core.device_manager import DeviceManager
-            res = DeviceManager.test_connection(self.url)
-            if res.get("success"):
-                self.test_finished.emit(True, res.get("message", "Stream active and verified"))
-            else:
-                self.test_finished.emit(False, res.get("error", "RTSP stream handshake failed"))
-        except Exception as e:
-            self.test_finished.emit(False, str(e))
+AsyncSettingsConnectionTester = ConnectionTestWorker
 
 
 class CameraSetupPromptDialog(QDialog):
@@ -1841,37 +1811,28 @@ class SettingsDialog(QDialog):
             self._load_camera_overrides_to_ui(initial_id)
 
     def _extract_rtsp_path(self, url: str, default_path: str = "/live/ch00_0") -> str:
-        if not url:
-            return default_path
-        if url.startswith("rtsp://"):
-            url = url[7:]
-        slash_idx = url.find("/")
-        if slash_idx != -1:
-            p = url[slash_idx:]
-            return p if p.startswith("/") else f"/{p}"
-        return default_path
+        return stream_path(url, default_path)
 
     def _build_rtsp_url(self, user: str, pwd: str, ip: str, port: int, path: str) -> str:
-        auth = f"{user}:{pwd}@" if user and pwd else ""
-        if not path.startswith("/"):
-            path = f"/{path}"
-        return f"rtsp://{auth}{ip}:{port}{path}"
+        return build_rtsp_url(user, pwd, ip, port, path)
 
     def _test_camera_connection(self):
         ip = self.txt_cam_ip.text().strip()
         port = self.spin_cam_port.value()
         user = self.txt_cam_user.text().strip() or "admin"
-        pwd = self.txt_cam_pass.text().strip()
+        pwd = self.txt_cam_pass.text()
 
         if not ip:
             self.lbl_test_badge.setText("Missing IP")
             self.lbl_test_badge.setStyleSheet("background-color: rgba(239, 68, 68, 0.2); border: 1px solid #ef4444; border-radius: 6px; padding: 4px 10px; color: #fca5a5; font-weight: 600; font-size: 11px;")
             return
 
-        curr_url = self.txt_cam_url1.text().strip()
-        path = self._extract_rtsp_path(curr_url, "/live/ch00_0")
-        url = self._build_rtsp_url(user, pwd, ip, port, path)
-        self.txt_cam_url1.setText(url)
+        url = self.txt_cam_url1.text().strip()
+        if not url:
+            self._auto_update_cam_urls()
+            url = self.txt_cam_url1.text().strip()
+        self._tested_url = url
+        self._tested_camera_id = self.cmb_active_cam.currentData()
 
         self.btn_test_conn.setEnabled(False)
         self.btn_test_conn.setText("Testing...")
@@ -1885,12 +1846,16 @@ class SettingsDialog(QDialog):
     def _on_test_connection_finished(self, success: bool, message: str):
         self.btn_test_conn.setEnabled(True)
         self.btn_test_conn.setText("Test Connection")
+        if (self.txt_cam_url1.text().strip() != getattr(self, "_tested_url", "") or
+                self.cmb_active_cam.currentData() != getattr(self, "_tested_camera_id", None)):
+            self.lbl_test_badge.setText("Settings changed — test again")
+            return
         if success:
             self.lbl_test_badge.setText("Online / Verified")
             self.lbl_test_badge.setToolTip(message)
             self.lbl_test_badge.setStyleSheet("background-color: rgba(16, 185, 129, 0.2); border: 1px solid #10b981; border-radius: 6px; padding: 4px 10px; color: #34d399; font-weight: 700; font-size: 11px;")
         else:
-            self.lbl_test_badge.setText("Offline / Failed")
+            self.lbl_test_badge.setText("Video not verified")
             self.lbl_test_badge.setToolTip(message)
             self.lbl_test_badge.setStyleSheet("background-color: rgba(239, 68, 68, 0.2); border: 1px solid #ef4444; border-radius: 6px; padding: 4px 10px; color: #fca5a5; font-weight: 700; font-size: 11px;")
 
@@ -1908,10 +1873,12 @@ class SettingsDialog(QDialog):
             self._auto_update_cam_urls()
 
     def _auto_update_cam_urls(self, *args):
+        if getattr(self, "_loading_connection", False):
+            return
         ip = self.txt_cam_ip.text().strip()
         port = self.spin_cam_port.value()
         user = self.txt_cam_user.text().strip()
-        pwd = self.txt_cam_pass.text().strip()
+        pwd = self.txt_cam_pass.text()
         if ip:
             curr_url1 = self.txt_cam_url1.text().strip()
             path1 = self._extract_rtsp_path(curr_url1, "/live/ch00_0")
@@ -1941,16 +1908,16 @@ class SettingsDialog(QDialog):
         ip = self.txt_cam_ip.text().strip() or cam.get("ip", "192.168.1.100")
         port = self.spin_cam_port.value()
         user = self.txt_cam_user.text().strip() or "admin"
-        pwd = self.txt_cam_pass.text().strip()
+        pwd = self.txt_cam_pass.text()
         is_dual = self.sw_cam_dual.isChecked()
 
         curr_url1 = self.txt_cam_url1.text().strip()
         path1 = self._extract_rtsp_path(curr_url1, cam.get("lens1_path") or "/live/ch00_0")
-        url1 = self._build_rtsp_url(user, pwd, ip, port, path1)
+        url1 = curr_url1 or self._build_rtsp_url(user, pwd, ip, port, path1)
 
         curr_url2 = self.txt_cam_url2.text().strip()
         path2 = self._extract_rtsp_path(curr_url2, cam.get("lens2_path") or "/live/ch01_0")
-        url2 = self._build_rtsp_url(user, pwd, ip, port, path2) if is_dual else ""
+        url2 = (curr_url2 or self._build_rtsp_url(user, pwd, ip, port, path2)) if is_dual else ""
 
         self.txt_cam_url1.setText(url1)
         if is_dual:
@@ -2008,6 +1975,13 @@ class SettingsDialog(QDialog):
             self._load_camera_overrides_to_ui(cid)
 
     def _load_camera_overrides_to_ui(self, cid: str):
+        self._loading_connection = True
+        try:
+            self._load_camera_fields(cid)
+        finally:
+            self._loading_connection = False
+
+    def _load_camera_fields(self, cid: str):
         cam = next((c for c in self.cameras if c.get("id") == cid), None)
         if cam:
             self.txt_cam_name.setText(cam.get("name", ""))
@@ -2023,16 +1997,14 @@ class SettingsDialog(QDialog):
             if len(streams) >= 1:
                 self.txt_cam_url1.setText(streams[0].get("url", ""))
             elif cam.get("lens1_path"):
-                auth = f"{cam.get('username')}:{cam.get('password')}@" if cam.get("username") and cam.get("password") else ""
-                self.txt_cam_url1.setText(f"rtsp://{auth}{cam.get('ip')}:{cam.get('port', 554)}{cam.get('lens1_path')}")
+                self.txt_cam_url1.setText(build_rtsp_url(cam.get("username", ""), cam.get("password", ""), cam.get("ip", ""), cam.get("port", 554), cam["lens1_path"]))
             else:
                 self.txt_cam_url1.setText("")
 
             if len(streams) >= 2:
                 self.txt_cam_url2.setText(streams[1].get("url", ""))
             elif cam.get("lens2_path"):
-                auth = f"{cam.get('username')}:{cam.get('password')}@" if cam.get("username") and cam.get("password") else ""
-                self.txt_cam_url2.setText(f"rtsp://{auth}{cam.get('ip')}:{cam.get('port', 554)}{cam.get('lens2_path')}")
+                self.txt_cam_url2.setText(build_rtsp_url(cam.get("username", ""), cam.get("password", ""), cam.get("ip", ""), cam.get("port", 554), cam["lens2_path"]))
             else:
                 self.txt_cam_url2.setText("")
 
@@ -2373,7 +2345,7 @@ class SettingsDialog(QDialog):
                 "ip": self.txt_cam_ip.text().strip(),
                 "port": self.spin_cam_port.value() if hasattr(self, "spin_cam_port") else 554,
                 "user": self.txt_cam_user.text().strip() if hasattr(self, "txt_cam_user") else "admin",
-                "pass": self.txt_cam_pass.text().strip() if hasattr(self, "txt_cam_pass") else "",
+                "pass": self.txt_cam_pass.text() if hasattr(self, "txt_cam_pass") else "",
                 "dual": self.sw_cam_dual.isChecked() if hasattr(self, "sw_cam_dual") else False,
                 "url1": self.txt_cam_url1.text().strip() if hasattr(self, "txt_cam_url1") else "",
                 "url2": self.txt_cam_url2.text().strip() if hasattr(self, "txt_cam_url2") else "",
@@ -2471,6 +2443,11 @@ class SettingsDialog(QDialog):
         else:
             super().reject()
 
+    def done(self, result):
+        if self.test_worker is not None and self.test_worker.isRunning():
+            self.test_worker.cancel()
+        super().done(result)
+
     def closeEvent(self, event):
         if self.has_unsaved_changes():
             action = self._prompt_unsaved_changes()
@@ -2483,3 +2460,5 @@ class SettingsDialog(QDialog):
                 event.ignore()
         else:
             event.accept()
+        if event.isAccepted() and self.test_worker is not None and self.test_worker.isRunning():
+            self.test_worker.cancel()

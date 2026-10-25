@@ -298,23 +298,42 @@ class DeviceManager:
         return False
 
     @staticmethod
-    def test_connection(rtsp_url: str, timeout_sec: float = 3.5) -> Dict[str, Any]:
+    def test_connection(rtsp_url: str, timeout_sec: float = 10.0, *, cancelled=None) -> Dict[str, Any]:
         """
         Tests whether an RTSP stream can be opened and decoded.
         Waits for keyframe (I-frame) decoding up to timeout_sec.
         """
         from core.capture_process import IsolatedCapture
-        cap = IsolatedCapture(open_timeout=timeout_sec, read_timeout=timeout_sec)
+        from core.camera_urls import camera_endpoint
+        try:
+            host, port = camera_endpoint(rtsp_url)
+        except ValueError:
+            return {"success": False, "error_code": "invalid_url", "error": "Enter a complete, valid camera stream URL."}
+        cap = IsolatedCapture(open_timeout=timeout_sec, read_timeout=timeout_sec, cancelled=cancelled)
         try:
             if not cap.open(rtsp_url):
-                return {"success": False, "error": "Could not connect or receive video before the timeout. Check the camera address and credentials."}
+                if cancelled and cancelled():
+                    return {"success": False, "error_code": "cancelled", "error": "Test cancelled."}
+                reachable = False
+                try:
+                    with socket.create_connection((host, port), timeout=.75):
+                        reachable = True
+                except OSError:
+                    pass
+                if reachable:
+                    return {"success": False, "reachable": True, "error_code": cap.error_code,
+                            "error": "Camera endpoint is reachable, but video was not verified. Check credentials, stream path, RTSP support and the camera's connection limit."}
+                return {"success": False, "reachable": False, "error_code": cap.error_code,
+                        "error": "Camera endpoint could not be reached. Check its address, stream port, power and network connection."}
             ret, frame = cap.read()
             if not ret or frame is None:
-                return {"success": False, "error": "Connected, but no video frame was received."}
+                return {"success": False, "reachable": True, "error_code": "no_video", "error": "Camera connected, but no complete video frame was received. Try again after the next keyframe."}
             h, w = frame.shape[:2]
-            fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-            return {"success": True, "width": w, "height": h, "fps": fps,
-                    "message": f"Successfully connected! {w}x{h} @ {fps:.1f}fps"}
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            import math
+            fps = fps if math.isfinite(fps) and 0 < fps <= 120 else 25.0
+            return {"success": True, "reachable": True, "width": w, "height": h, "fps": fps,
+                    "message": f"Video verified: {w}x{h} @ {fps:.1f}fps"}
         finally:
             cap.release()
 

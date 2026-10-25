@@ -9,8 +9,11 @@ import time
 
 
 def _decode(url, sender, stop, sequence, open_ms, read_ms, attached):
+    sender.send({"stage": "starting"})
     import os
-    os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|fflags;nobuffer|flags;low_delay|threads;1"
+    # Preserve probe packets/keyframes. The latest-frame mailbox, rather than
+    # aggressive codec flags, keeps playback at the live edge.
+    os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|threads;1"
     if os.name == "nt":
         import ctypes
         ctypes.windll.kernel32.SetPriorityClass(ctypes.windll.kernel32.GetCurrentProcess(), 0x4000)
@@ -24,11 +27,15 @@ def _decode(url, sender, stop, sequence, open_ms, read_ms, attached):
                   cv2.CAP_PROP_READ_TIMEOUT_MSEC, read_ms]
         if hasattr(cv2, "CAP_PROP_N_THREADS"):
             params += [cv2.CAP_PROP_N_THREADS, 1]
+        sender.send({"stage": "opening"})
         cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG, params)
         if not cap.isOpened():
+            sender.send({"error": "open_failed"})
             return
+        sender.send({"stage": "waiting_for_frame"})
         ok, frame = cap.read()
         if not ok or frame is None:
+            sender.send({"error": "no_video"})
             return
         # Reject unreasonable allocations from malformed stream metadata.
         if frame.dtype != np.uint8 or frame.ndim != 3 or frame.shape[2] != 3 or frame.nbytes > 128 * 1024 * 1024:
@@ -60,10 +67,13 @@ def _decode(url, sender, stop, sequence, open_ms, read_ms, attached):
 
 
 class IsolatedCapture:
-    def __init__(self, open_timeout=6.0, read_timeout=4.0, *, _target=_decode):
+    def __init__(self, open_timeout=8.0, read_timeout=8.0, *, cancelled=None, _target=_decode):
         self.open_timeout = open_timeout
         self.read_timeout = read_timeout
         self._target = _target
+        self._cancelled = cancelled or (lambda: False)
+        self.error_code = ""
+        self.stage = "starting"
         context = mp.get_context("spawn")
         self._stop = context.Event()
         self._attached = context.Event()
@@ -77,7 +87,7 @@ class IsolatedCapture:
         self._grabbed = False
 
     def open(self, url):
-        if self._stop.is_set():
+        if self._should_stop():
             return False
         context = mp.get_context("spawn")
         self._process = context.Process(target=self._target, args=(
@@ -85,11 +95,24 @@ class IsolatedCapture:
             int(self.open_timeout * 1000), int(self.read_timeout * 1000), self._attached), daemon=True)
         self._process.start()
         self._sender.close()
-        deadline = time.monotonic() + self.open_timeout
-        while not self._stop.is_set() and time.monotonic() < deadline:
+        # Importing a frozen decoder can take longer than a camera handshake.
+        # Account for startup, open, and first-frame waits separately.
+        startup = max(10.0, self.open_timeout) if self._target is _decode else self.open_timeout
+        deadline = time.monotonic() + startup
+        while not self._should_stop() and time.monotonic() < deadline:
             if self._receiver.poll(0.02):
                 try:
-                    name, shape, fps = self._receiver.recv()
+                    response = self._receiver.recv()
+                    if isinstance(response, dict):
+                        if "error" in response:
+                            self.error_code = response["error"]
+                            return False
+                        stage = response.get("stage")
+                        if stage != self.stage:
+                            self.stage = stage
+                            deadline = time.monotonic() + (self.read_timeout if stage == "waiting_for_frame" else self.open_timeout)
+                        continue
+                    name, shape, fps = response
                     self._memory = shared_memory.SharedMemory(name=name)
                     self._shape, self._fps = shape, fps
                     self._attached.set()
@@ -98,7 +121,13 @@ class IsolatedCapture:
                     break
             if not self._process.is_alive():
                 break
+        self.error_code = "cancelled" if self._stop.is_set() else self.stage + "_timeout"
         return False
+
+    def _should_stop(self):
+        if self._cancelled():
+            self.interrupt()
+        return self._stop.is_set()
 
     def isOpened(self):
         return self._memory is not None and not self._stop.is_set()
@@ -112,7 +141,7 @@ class IsolatedCapture:
     def grab(self):
         self._grabbed = False
         deadline = time.monotonic() + self.read_timeout
-        while self.isOpened() and time.monotonic() < deadline:
+        while not self._should_stop() and self.isOpened() and time.monotonic() < deadline:
             sequence = self._sequence.value
             if sequence and not sequence % 2 and sequence != self._last_sequence:
                 self._last_sequence = sequence
@@ -129,7 +158,7 @@ class IsolatedCapture:
             return False, None
         pixels = np.ndarray(self._shape, dtype=np.uint8, buffer=self._memory.buf)
         deadline = time.monotonic() + .05
-        while not self._stop.is_set() and time.monotonic() < deadline:
+        while not self._should_stop() and time.monotonic() < deadline:
             before = self._sequence.value
             if before % 2:
                 self._stop.wait(.001)

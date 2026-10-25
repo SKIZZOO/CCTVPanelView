@@ -3358,21 +3358,33 @@ class MainWindow(QMainWindow):
 
     def _refresh_signal_monitor_cameras(self):
         cameras = self.device_manager.get_cameras()
-        ips = [c.get("ip") for c in cameras if c.get("ip")]
-        self.signal_monitor.set_camera_ips(ips)
+        from core.camera_urls import camera_endpoint
+        endpoints = {}
+        for camera in cameras:
+            key = camera.get("ip")
+            if not key:
+                continue
+            for stream in camera.get("streams", []):
+                try:
+                    endpoints.setdefault(key, []).append(camera_endpoint(stream.get("url", "")))
+                except ValueError:
+                    pass
+            if not endpoints.get(key):
+                endpoints[key] = [(key, int(camera.get("port", 554)))]
+        self.signal_monitor.set_camera_endpoints(endpoints)
 
     def _on_signals_updated(self, results: dict):
-        # Guarantee online status for cameras actively streaming live video frames
+        results = {key: dict(value) for key, value in results.items()}
+        # Only fresh video can override an unsuccessful endpoint probe.
         for tile in self.video_tiles:
-            if tile.camera_ip and ((tile.worker and getattr(tile.worker, "status", None) == StreamStatus.LIVE) or tile.fps > 0 or tile.current_frame is not None):
+            if tile.camera_ip and tile.worker and tile.worker.has_recent_frame():
                 ip = tile.camera_ip
                 if ip not in results or not results[ip].get("is_online"):
                     results[ip] = {
                         "ip": ip,
                         "is_online": True,
-                        "latency_ms": 22.0,
+                        "latency_ms": 0.0,
                         "percent": 95,
-                        "approx_dbm": -42,
                         "bars": "[OK] 4/4",
                         "bars_text": "Live Streaming",
                         "color": "#38bdf8",

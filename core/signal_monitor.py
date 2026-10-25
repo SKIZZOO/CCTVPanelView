@@ -21,6 +21,7 @@ class SignalMonitor(QObject):
         super().__init__(parent)
         self.check_interval_ms = int(check_interval_sec * 1000)
         self.camera_ips: List[str] = []
+        self._endpoints = {}
         self.signal_cache: Dict[str, Dict[str, Any]] = {}
         self._last_offline_probe: Dict[str, float] = {}
         self._stopped = False
@@ -34,8 +35,13 @@ class SignalMonitor(QObject):
         self.timer.timeout.connect(self.probe_all_cameras)
 
     def set_camera_ips(self, ips: List[str]):
-        """Updates the monitored IP list and triggers an immediate probe."""
-        self.camera_ips = list(dict.fromkeys(ip.strip() for ip in ips if ip and ip.strip()))
+        self.set_camera_endpoints({ip.strip(): [(ip.strip(), 554)] for ip in ips if ip and ip.strip()})
+
+    def set_camera_endpoints(self, endpoints):
+        """key -> [(host, port)]; keys remain camera IDs/IPs used by the UI."""
+        self._endpoints = {key: tuple(dict.fromkeys((host, int(port)) for host, port in values))
+                           for key, values in endpoints.items() if key and values}
+        self.camera_ips = list(self._endpoints)
         self.signal_cache = {ip: value for ip, value in self.signal_cache.items() if ip in self.camera_ips}
         self._queue = [ip for ip in self._queue if ip in self.camera_ips]
         self.probe_all_cameras()
@@ -68,11 +74,21 @@ class SignalMonitor(QObject):
         while self._queue and len(self._pending) < 4 and not self._stopped:
             ip = self._queue.pop(0)
             self._pending.add(ip)
-            self._executor.submit(self._probe_and_report, ip)
+            self._executor.submit(self._probe_and_report, ip, self._endpoints.get(ip, ((ip, 554),)))
 
-    def _probe_and_report(self, ip):
+    def _probe_and_report(self, ip, endpoints):
+        info = None
         try:
-            info = self._probe_single_ip(ip, timeout=1.5)
+            deadline = time.monotonic() + 1.5
+            for host, port in endpoints:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                info = self._probe_single_ip(host, port=port, timeout=remaining / len(endpoints))
+                if info.get("is_online"):
+                    break
+            if info is not None:
+                info = dict(info, ip=ip, endpoints=endpoints)
         except Exception:
             info = None
         try:
@@ -86,6 +102,11 @@ class SignalMonitor(QObject):
         if self._stopped:
             return
         if ip in self.camera_ips and info is not None:
+            if info.get("endpoints") != self._endpoints.get(ip):
+                if ip not in self._queue:
+                    self._queue.append(ip)
+                self._dispatch_probes()
+                return
             self.signal_cache[ip] = info
             self.camera_status_changed.emit(ip, info["is_online"], info["latency_ms"])
             self.signals_updated.emit(dict(self.signal_cache))
@@ -96,18 +117,11 @@ class SignalMonitor(QObject):
         Connects via TCP to test latency and port reachability.
         """
         t0 = time.perf_counter()
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(timeout)
         try:
-            err = sock.connect_ex((ip, port))
-            rtt_ms = (time.perf_counter() - t0) * 1000.0
-            sock.close()
-            is_online = (err == 0)
-        except Exception:
-            try:
-                sock.close()
-            except Exception:
-                pass
+            with socket.create_connection((ip, port), timeout=timeout):
+                rtt_ms = (time.perf_counter() - t0) * 1000.0
+            is_online = True
+        except OSError:
             rtt_ms = 999.0
             is_online = False
 
