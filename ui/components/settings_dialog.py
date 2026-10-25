@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import (
     QProgressBar, QStackedWidget, QListWidget, QListWidgetItem,
     QApplication, QMessageBox, QSpinBox, QDoubleSpinBox
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QSize, QRectF, QPointF, QThread
+from PyQt6.QtCore import Qt, pyqtSignal, QSize, QRectF, QPointF, QThread, QTimer
 from PyQt6.QtGui import (
     QIcon, QPixmap, QPainter, QColor, QFont, QPen, QBrush, QPainterPath
 )
@@ -870,11 +870,11 @@ class SettingsDialog(QDialog):
         """)
 
         nav_items = [
-            (" Appearance & Layout", "appearance"),
-            (" Mobile Notifications", "mobile"),
-            (" Motion & AI Detection", "ai_motion"),
-            (" Storage & Google Drive", "storage"),
-            (" Individual Cameras", "cameras"),
+            (" General & layout", "appearance"),
+            (" Alerts & sounds", "mobile"),
+            (" Detection", "ai_motion"),
+            (" Recording & storage", "storage"),
+            (" Cameras & image", "cameras"),
             (" PC Performance", "performance"),
             (" Sounds & Alarms", "sound"),
             (" Night Mode & Contrast", "night"),
@@ -907,9 +907,48 @@ class SettingsDialog(QDialog):
         self._build_tab_night()          # Index 7
         self._build_tab_wind()           # Index 8
 
+        # Keep related controls on the same page, preserving the first six page
+        # indexes used by existing shortcuts and deep links.
+        for source_index, destination in ((6, 1), (7, 4), (8, 2)):
+            source_layout = self.stack.widget(source_index).widget().layout()
+            destination_layout = self.stack.widget(destination).widget().layout()
+            while source_layout.count():
+                item = source_layout.takeAt(0)
+                if item.widget():
+                    destination_layout.insertWidget(max(0, destination_layout.count() - 1), item.widget())
+        while self.stack.count() > 6:
+            page = self.stack.widget(6)
+            self.stack.removeWidget(page)
+            page.deleteLater()
+        while self.sidebar.count() > 6:
+            self.sidebar.takeItem(6)
+        self.settings_search = QLineEdit()
+        self.settings_search.setStyleSheet("QLineEdit { background: #111827; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px; padding: 8px 12px; min-height: 20px; }")
+        self.settings_search.setPlaceholderText("Find a setting: volume, camera, retention, detection…")
+        self.settings_search.textChanged.connect(self._search_settings)
+        root_layout.insertWidget(1, self.settings_search)
+        self.settings_search_feedback = QLabel("No matching settings. Try a shorter search.")
+        self.settings_search_feedback.setVisible(False)
+        root_layout.insertWidget(2, self.settings_search_feedback)
+
         # Sync sidebar selection with stacked widget and dynamic active icon color
         self.sidebar.currentRowChanged.connect(self._on_sidebar_row_changed)
         self.sidebar.setCurrentRow(0)
+
+    def _search_settings(self, text):
+        query = text.strip().casefold()
+        first = None
+        for index in range(self.stack.count()):
+            page = self.stack.widget(index)
+            labels = " ".join(label.text() for label in page.findChildren(QLabel)).casefold()
+            match = not query or query in labels or query in self.sidebar.item(index).text().casefold()
+            self.sidebar.item(index).setHidden(not match)
+            if match and first is None:
+                first = index
+        self.settings_search_feedback.setVisible(first is None)
+        self.stack.setVisible(first is not None)
+        if first is not None and self.sidebar.item(self.sidebar.currentRow()).isHidden():
+            self.sidebar.setCurrentRow(first)
 
     def _on_sidebar_row_changed(self, row: int):
         self.stack.setCurrentIndex(row)
@@ -946,12 +985,12 @@ class SettingsDialog(QDialog):
         self.cmb_layout = QComboBox()
         self.cmb_layout.setFixedWidth(210)
         self.cmb_layout.setFixedHeight(32)
-        self.cmb_layout.addItem("1x1 (Single Camera)", "1x1")
-        self.cmb_layout.addItem("2x2 (4 Cameras - Recommended)", "2x2")
-        self.cmb_layout.addItem("3x3 (9 Camera Grid)", "3x3")
-        self.cmb_layout.addItem("Dual-Lens (PTZ + Wide)", "dual_hero")
-        curr_layout = self.settings.get("default_layout", "2x2")
-        idx = self.cmb_layout.findData(curr_layout)
+        for label, key in [("Single camera", "1x1"), ("Two side by side", "2x1"),
+                           ("Two stacked", "1x2"), ("Four cameras", "2x2"),
+                           ("One large + five", "1+5"), ("Nine cameras", "3x3"),
+                           ("Sixteen cameras", "4x4"), ("Custom layout", "custom")]:
+            self.cmb_layout.addItem(label, key)
+        idx = self.cmb_layout.findData(self.settings.get("default_layout", "2x2"))
         if idx >= 0:
             self.cmb_layout.setCurrentIndex(idx)
         card_layout.add_row(SettingRow("Startup Grid Layout", "Window arrangement when launching the application", self.cmb_layout))
@@ -2071,11 +2110,12 @@ class SettingsDialog(QDialog):
         self.cmb_perf_profile = QComboBox()
         self.cmb_perf_profile.setFixedWidth(210)
         self.cmb_perf_profile.setFixedHeight(32)
-        self.cmb_perf_profile.addItem("Balanced (Recommended)", "balanced")
-        self.cmb_perf_profile.addItem("Ryzen CCD1 (Fast V-Cache / L3)", "performance")
-        self.cmb_perf_profile.addItem("Eco / Energy Saver", "eco")
-        self.cmb_perf_profile.addItem("Ultra Power (All Cores)", "extreme")
-        curr_prof = self.settings.get("performance_profile", "balanced")
+        self.cmb_perf_profile.addItem("Balanced (Recommended)", "medium")
+        self.cmb_perf_profile.addItem("Background / gaming", "gamer")
+        self.cmb_perf_profile.addItem("Eco / Energy Saver", "low")
+        self.cmb_perf_profile.addItem("Full performance", "high")
+        curr_prof = self.settings.get("performance_profile", "medium")
+        curr_prof = {"balanced": "medium", "performance": "gamer", "eco": "low", "extreme": "high"}.get(curr_prof, curr_prof)
         idx = self.cmb_perf_profile.findData(curr_prof)
         if idx >= 0:
             self.cmb_perf_profile.setCurrentIndex(idx)
@@ -2138,11 +2178,10 @@ class SettingsDialog(QDialog):
         self.cmb_sound_profile = QComboBox()
         self.cmb_sound_profile.setFixedWidth(160)
         self.cmb_sound_profile.setFixedHeight(32)
-        self.cmb_sound_profile.addItem("Classic Beep", "classic_beep")
-        self.cmb_sound_profile.addItem("Tactical Siren", "tactical_siren")
-        self.cmb_sound_profile.addItem("Modern Chime", "modern_chime")
-        self.cmb_sound_profile.addItem("Military Radar", "military_laser")
-        curr_snd = self.settings.get("sound_profile", "modern_chime")
+        from core.sound_manager import SoundProfile, SoundManager
+        for profile in SoundProfile.ALL:
+            self.cmb_sound_profile.addItem(profile, profile)
+        curr_snd = SoundManager.normalize_profile(self.settings.get("sound_profile", SoundProfile.CYBER_CHIME))
         idx = self.cmb_sound_profile.findData(curr_snd)
         if idx >= 0:
             self.cmb_sound_profile.setCurrentIndex(idx)
@@ -2156,17 +2195,37 @@ class SettingsDialog(QDialog):
 
         self.slider_sound_vol = QSlider(Qt.Orientation.Horizontal)
         self.slider_sound_vol.setRange(0, 100)
-        self.slider_sound_vol.setValue(int(float(self.settings.get("alert_volume", 0.8)) * 100))
+        self.slider_sound_vol.setValue(SoundManager.volume_from_settings(self.settings))
         self.slider_sound_vol.setFixedWidth(140)
         lbl_vol_val = QLabel(f"{self.slider_sound_vol.value()}%")
         lbl_vol_val.setStyleSheet("font-weight: 700; color: #38bdf8; min-width: 40px;")
         self.slider_sound_vol.valueChanged.connect(lambda v: lbl_vol_val.setText(f"{v}%"))
+        self.slider_sound_vol.valueChanged.connect(lambda v: self.sound_manager.stop() if v == 0 else None)
+        self.slider_sound_vol.sliderReleased.connect(self._test_sound)
         vol_box = QWidget()
         vb_lay = QHBoxLayout(vol_box)
         vb_lay.setContentsMargins(0, 0, 0, 0)
         vb_lay.addWidget(self.slider_sound_vol)
         vb_lay.addWidget(lbl_vol_val)
         card_snd.add_row(SettingRow("PC Speaker Volume", "Audio loudness of local alarms", vol_box))
+
+        custom_row = QWidget()
+        custom_layout = QHBoxLayout(custom_row)
+        custom_layout.setContentsMargins(0, 0, 0, 0)
+        self.txt_custom_sound = QLineEdit(self.settings.get("custom_sound_path", ""))
+        self.txt_custom_sound.setPlaceholderText("Uncompressed PCM WAV file")
+        custom_layout.addWidget(self.txt_custom_sound)
+        browse_sound = QPushButton("Browse…")
+        browse_sound.clicked.connect(self._browse_sound)
+        custom_layout.addWidget(browse_sound)
+        card_snd.add_row(SettingRow("Custom sound file", "Choose Custom WAV File above to use this file", custom_row))
+        self.sw_siren_enabled = ToggleSwitch(checked=self.settings.get("sound_alarms_enabled", True))
+        card_snd.add_row(SettingRow("Enable audible alerts", "Play the selected tone for alert events", self.sw_siren_enabled))
+        self.sound_feedback = QLabel("")
+        card_snd.layout.addWidget(self.sound_feedback)
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.timeout.connect(self._sound_preview_result)
 
         self.sw_motion_sound = ToggleSwitch(checked=self.settings.get("motion_sound", False))
         card_snd.add_row(SettingRow("Short Beep on Any Motion", "Subtle alert on motion even before subject confirmation", self.sw_motion_sound))
@@ -2178,11 +2237,26 @@ class SettingsDialog(QDialog):
         layout.addStretch(1)
         self.stack.addWidget(scroll)
 
+    def _browse_sound(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Choose alert sound", "", "PCM WAV audio (*.wav)")
+        if path:
+            self.txt_custom_sound.setText(path)
+            self.cmb_sound_profile.setCurrentIndex(self.cmb_sound_profile.findData(SoundProfile.CUSTOM))
+
+    def _sound_preview_result(self):
+        self.sound_feedback.setText(self.sound_manager.last_error or "Preview complete — output uses the Windows default playback device.")
+
     def _test_sound(self):
         if self.sound_manager:
-            vol = float(self.slider_sound_vol.value()) / 100.0
-            prof = self.cmb_sound_profile.currentData()
-            self.sound_manager.play_test_tone(prof, vol)
+            volume = self.slider_sound_vol.value()
+            profile = self.cmb_sound_profile.currentData()
+            custom = self.txt_custom_sound.text().strip()
+            if profile == SoundProfile.CUSTOM and not os.path.isfile(custom):
+                self.sound_feedback.setText("Choose an existing PCM WAV file first.")
+                return
+            self.sound_manager.play_test_tone(profile, volume, custom_path=custom)
+            self.sound_feedback.setText("Muted" if volume == 0 else f"Playing preview at {volume}%…")
+            self._preview_timer.start(1200)
 
     # -------------------------------------------------------------
     #  TAB 7: NIGHT MODE & CONTRAST
@@ -2303,7 +2377,9 @@ class SettingsDialog(QDialog):
 
             # Sound
             "sound_profile": self.cmb_sound_profile.currentData() if hasattr(self, "cmb_sound_profile") else "cyber_chime",
-            "alert_volume": float(self.slider_sound_vol.value()) / 100.0 if hasattr(self, "slider_sound_vol") else 0.80,
+            "custom_sound_path": self.txt_custom_sound.text().strip(),
+            "sound_alarms_enabled": self.sw_siren_enabled.isChecked(),
+            "sound_volume": self.slider_sound_vol.value() if hasattr(self, "slider_sound_vol") else 80,
             "motion_sound": self.sw_motion_sound.isChecked() if hasattr(self, "sw_motion_sound") else False,
             "mute_on_startup": self.sw_mute_startup.isChecked() if hasattr(self, "sw_mute_startup") else False,
 
@@ -2403,7 +2479,9 @@ class SettingsDialog(QDialog):
             "display_fps_cap": self.cmb_display_fps.currentData() if hasattr(self, "cmb_display_fps") else 25,
 
             "sound_profile": self.cmb_sound_profile.currentData() if hasattr(self, "cmb_sound_profile") else "cyber_chime",
-            "alert_volume": self.slider_sound_vol.value() if hasattr(self, "slider_sound_vol") else 80,
+            "custom_sound_path": self.txt_custom_sound.text().strip(),
+            "sound_alarms_enabled": self.sw_siren_enabled.isChecked(),
+            "sound_volume": self.slider_sound_vol.value() if hasattr(self, "slider_sound_vol") else 80,
             "motion_sound": self.sw_motion_sound.isChecked() if hasattr(self, "sw_motion_sound") else False,
             "mute_on_startup": self.sw_mute_startup.isChecked() if hasattr(self, "sw_mute_startup") else False,
 
@@ -2462,3 +2540,4 @@ class SettingsDialog(QDialog):
             event.accept()
         if event.isAccepted() and self.test_worker is not None and self.test_worker.isRunning():
             self.test_worker.cancel()
+

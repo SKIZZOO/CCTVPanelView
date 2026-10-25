@@ -510,10 +510,11 @@ class AlertManager(QObject):
     """
     alert_triggered = pyqtSignal(dict)      # Emitted immediately with snapshot & pending clip
     alert_video_ready = pyqtSignal(dict)    # Emitted when the 10-second video recording finishes
+    history_loaded = pyqtSignal()
     alerts_cleared = pyqtSignal()
     alerts_purged = pyqtSignal(list)        # Emitted when older alerts are removed by storage quota / retention
 
-    def __init__(self, snapshot_dir: str = "snapshots", recording_dir: str = "recordings", parent=None):
+    def __init__(self, snapshot_dir: str = "snapshots", recording_dir: str = "recordings", parent=None, defer_history=False):
         super().__init__(parent)
         self.snapshot_dir = os.path.abspath(os.path.join(snapshot_dir, "alarms"))
         self.recording_dir = os.path.abspath(os.path.join(recording_dir, "alarms"))
@@ -545,8 +546,24 @@ class AlertManager(QObject):
             print(f"[AlertManager] Could not initialize NotificationDispatcher: {e}")
 
         self.alert_video_ready.connect(self._on_alert_video_ready_notify)
-        self._load_history()
+        if defer_history:
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(0, self._start_history_loading)
+        else:
+            self._load_history()
         threading.Thread(target=self.clean_temp_files, daemon=True, name="StartupTempCleanup").start()
+
+    def _start_history_loading(self):
+        def load():
+            try:
+                with self.lock:
+                    self._load_history()
+            finally:
+                try:
+                    self.history_loaded.emit()
+                except RuntimeError:
+                    pass
+        threading.Thread(target=load, daemon=True, name="AlertHistory").start()
 
     def _on_alert_video_ready_notify(self, alert_entry: dict):
         if self.notification_dispatcher and alert_entry.get("video_ready"):

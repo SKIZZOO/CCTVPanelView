@@ -258,9 +258,10 @@ class AIDetector:
         self.VEHICLE_CLASSES = VEHICLE_CLASSES
         self.EXCLUDED_CLASSES = EXCLUDED_CLASSES
 
-        self._load_model()
+        self._model_attempted = False
 
     def _load_model(self):
+        self._model_attempted = True
         candidate_paths = [
             self.model_path,
         ]
@@ -302,6 +303,8 @@ class AIDetector:
         Runs inference on an OpenCV BGR frame.
         Returns a list of AIDetection objects matching active filters.
         """
+        if not self._model_attempted:
+            self._load_model()
         if not self.is_ready or self.net is None or frame is None:
             return []
 

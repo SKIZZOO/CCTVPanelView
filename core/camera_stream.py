@@ -861,7 +861,7 @@ class CameraStreamWorker(QThread):
                             self._handle_motion_alarm(frame, boxes)
     
                     # --- 4. AI Person & Animal Detection Engine ---
-                    if self.ai_detection_enabled and self.ai_detector and self.ai_detector.is_ready:
+                    if self.ai_detection_enabled and self.ai_detector:
                         self._frame_count += 1
                         cam_ctx = self.camera_name or self.stream_name
     

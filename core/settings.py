@@ -19,6 +19,20 @@ NUMERIC_LIMITS = {
 
 def normalize_settings(settings):
     result = dict(settings) if isinstance(settings, dict) else {}
+    profiles = {"balanced": "medium", "performance": "gamer", "eco": "low", "extreme": "high"}
+    if "performance_profile" in result:
+        result["performance_profile"] = profiles.get(result["performance_profile"], result["performance_profile"])
+    if "sound_volume" not in result and "alert_volume" in result:
+        try:
+            value = float(result["alert_volume"])
+            result["sound_volume"] = max(0, min(100, round(value * 100 if value <= 1 else value)))
+        except (ValueError, TypeError, OverflowError):
+            result["sound_volume"] = 80
+    if "sound_volume" in result:
+        try:
+            result["sound_volume"] = max(0, min(100, round(float(result["sound_volume"]))))
+        except (ValueError, TypeError, OverflowError):
+            result["sound_volume"] = 80
     for key, (low, high, default, cast) in NUMERIC_LIMITS.items():
         if key not in result:
             continue

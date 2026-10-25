@@ -9,7 +9,7 @@ import winsound
 import ctypes
 from typing import Optional, Dict, Any, List
 from PyQt6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
+    QCheckBox, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QTreeWidget, QTreeWidgetItem, QFrame,
     QSplitter, QStatusBar, QMessageBox, QMenu, QComboBox, QApplication,
     QListWidget, QTabWidget, QScrollArea, QDialog, QSizePolicy, QProgressBar,
@@ -352,7 +352,7 @@ class SlimStatusBarProxy:
     def __init__(self, label: QLabel, dot: QLabel = None):
         self.label = label
         self.dot = dot
-        self._timer = QTimer()
+        self._timer = QTimer(label)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self._reset_msg)
 
@@ -374,6 +374,7 @@ class SlimStatusBarProxy:
 
 
 class MainWindow(QMainWindow):
+    telemetry_ready = pyqtSignal(object)
     """
     CCTVPanelView Workstation - Professional Next-Gen AI CCTV Suite.
     """
@@ -420,7 +421,7 @@ class MainWindow(QMainWindow):
         self.master_alerts_enabled = bool(self.app_settings.get("master_alerts_enabled", True))
         self.global_motion_enabled = self.app_settings.get("motion_enabled", True)
         self.motion_sound_enabled = self.app_settings.get("motion_sound", False)
-        self.sound_alarms_enabled = not self.app_settings.get("mute_on_startup", False)
+        self.sound_alarms_enabled = self.app_settings.get("sound_alarms_enabled", True) and not self.app_settings.get("mute_on_startup", False)
 
         # Alert Coordinator (Instant snapshot + 10s video with audio recording)
         self.alert_cards = {}
@@ -428,8 +429,9 @@ class MainWindow(QMainWindow):
         self.alert_manager = AlertManager(
             snapshot_dir=self.app_settings.get("snapshot_dir", "snapshots"),
             recording_dir=self.app_settings.get("recording_dir", "recordings"),
-            parent=self
+            parent=self, defer_history=True
         )
+        self.alert_manager.history_loaded.connect(self._load_initial_alerts)
         self.alert_manager.set_app_settings(self.app_settings)
         self.alert_manager.alert_triggered.connect(self._on_alert_triggered_from_manager)
         self.alert_manager.alert_video_ready.connect(self._on_alert_video_ready)
@@ -440,7 +442,11 @@ class MainWindow(QMainWindow):
         self.signal_monitor.signals_updated.connect(self._on_signals_updated)
 
         self._restoring_session = True
+        self._building_ui = True
+        self._telemetry_pending = False
+        self.telemetry_ready.connect(self._apply_telemetry_snapshot)
         self._setup_ui()
+        self._building_ui = False
         self.restore_window_state()
         if self.app_settings.get("sidebar_position") == "right":
             self.toggle_sidebar_position()
@@ -1151,6 +1157,18 @@ class MainWindow(QMainWindow):
         hdr_row1.addWidget(self.lbl_alert_count_badge)
         hdr_row1.addStretch()
         alerts_layout.addLayout(hdr_row1)
+        from core.alert_filters import CATEGORIES
+        selected = self.app_settings.get("visible_alert_categories", list(CATEGORIES))
+        self.alert_filter_checks = {}
+        filters = QGridLayout()
+        for index, (category, label) in enumerate(CATEGORIES.items()):
+            check = QCheckBox(label)
+            check.setChecked(category in selected)
+            check.setToolTip("Filter displayed alerts; detection and recordings continue.")
+            check.toggled.connect(self._apply_alert_filters)
+            self.alert_filter_checks[category] = check
+            filters.addWidget(check, index // 2, index % 2)
+        alerts_layout.addLayout(filters)
 
         # Header Row 2: Management Actions (30d Retention, Clips, Clear All) with Vector Icons
         hdr_row2 = QHBoxLayout()
@@ -1332,7 +1350,7 @@ class MainWindow(QMainWindow):
         ic_flyout_layout.setContentsMargins(6, 6, 6, 6)
         ic_flyout_layout.setSpacing(0)
 
-        self.intercom_dock = IntercomPad(self.intercom_flyout)
+        self.intercom_dock = IntercomPad(self.intercom_flyout, settings=self.app_settings)
         self.intercom_dock.close_requested.connect(self.hide_intercom_flyout)
         ic_flyout_layout.addWidget(self.intercom_dock)
 
@@ -1992,16 +2010,29 @@ class MainWindow(QMainWindow):
     def _update_cpu_monitor(self):
         if not hasattr(self, "btn_cpu_monitor"):
             return
-        rm = get_resource_manager()
+        if self._telemetry_pending or getattr(self, "_closing", False):
+            return
+        from concurrent.futures import ThreadPoolExecutor
+        if not hasattr(self, "_telemetry_executor"):
+            self._telemetry_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="Telemetry")
+        self._telemetry_pending = True
         rec_dir = self.app_settings.get("recording_dir", "recordings")
-        snap = rm.get_hardware_telemetry_snapshot(rec_dir)
+        future = self._telemetry_executor.submit(get_resource_manager().get_hardware_telemetry_snapshot, rec_dir)
+        def completed(result):
+            try:
+                snapshot = result.result()
+            except Exception:
+                snapshot = None
+            try:
+                self.telemetry_ready.emit(snapshot)
+            except RuntimeError:
+                pass
+        future.add_done_callback(completed)
 
-        # Periodic working set memory trim every 30 seconds to reclaim unreferenced RAM
-        now_ts = time.time()
-        if (now_ts - getattr(self, "_last_memory_trim_time", 0.0)) >= 30.0:
-            self._last_memory_trim_time = now_ts
-            rm.trim_memory()
-
+    def _apply_telemetry_snapshot(self, snap):
+        self._telemetry_pending = False
+        if not snap or getattr(self, "_closing", False):
+            return
         c = snap["cpu"]
         r = snap["ram"]
         g = snap["gpu"]
@@ -2009,9 +2040,9 @@ class MainWindow(QMainWindow):
 
         w = self.width() if hasattr(self, "width") else 1600
         if w >= 1550:
-            self.btn_cpu_monitor.setText(f" {c['app_pct']:.0f}% CPU")
+            self.btn_cpu_monitor.setText(f" {c['app_pct']:.1f}% CPU")
         elif w >= 980:
-            self.btn_cpu_monitor.setText(f" {c['app_pct']:.0f}%")
+            self.btn_cpu_monitor.setText(f" {c['app_pct']:.1f}%")
         else:
             self.btn_cpu_monitor.setText("")
 
@@ -2026,7 +2057,7 @@ class MainWindow(QMainWindow):
             gpu_desc = f"- GPU: {g.get('name', 'Standard / Integrated GPU')}"
 
         tooltip_text = (
-            f" SYSTEM HARDWARE & TELEMETRY BREAKDOWN\n\n"
+            f"Updated {datetime.now():%H:%M:%S} — CPU includes camera decoder processes\n\n"
             f"- CPU: {c['model']} ({c['total_cores']} Logical Cores)\n"
             f"  Total Windows System CPU: {c['sys_pct']:.1f}%\n"
             f"  CCTVPanelView Footprint: {c['app_pct']:.1f}% ({c['core_equiv_pct']:.1f}% of 1 Core)\n"
@@ -2109,9 +2140,16 @@ class MainWindow(QMainWindow):
         self.app_settings["selected_tile"] = self.selected_tile_idx
 
         self.app_settings["session_slot_assignments"] = slot_map
+        if layout_key == "custom" and self.app_settings.get("custom_layout"):
+            custom = dict(self.app_settings["custom_layout"])
+            custom["assignments"] = [slot_map.get(str(i), "") for i in range(len(custom.get("slots", [])))]
+            self.app_settings["custom_layout"] = custom
         if hasattr(self, "device_manager") and self.device_manager:
             self.device_manager.config["app_settings"] = self.app_settings
-            self.device_manager.save_config()
+            saved = self.device_manager.save_config()
+            if not saved:
+                self.statusBar().showMessage("Layout could not be saved: " + self.device_manager.last_save_error, 8000)
+            return saved
 
     def restore_window_state(self):
         rect = self.app_settings.get("window_rect")
@@ -2167,6 +2205,10 @@ class MainWindow(QMainWindow):
             if isinstance(saved_assignments, dict) and saved_assignments:
                 for slot_idx in range(min(len(self.video_tiles), 16)):
                     s_id = saved_assignments.get(str(slot_idx), "")
+                    if not s_id and str(slot_idx) in saved_assignments and self.video_tiles[slot_idx].stream_id:
+                        old_id = self.video_tiles[slot_idx].stream_id
+                        self.video_tiles[slot_idx].detach_stream()
+                        self._cleanup_worker_if_unused(old_id)
                     if s_id in stream_by_id:
                         self.start_stream_on_tile(slot_idx, stream_by_id[s_id])
                         restored_count += 1
@@ -2504,7 +2546,7 @@ class MainWindow(QMainWindow):
 
             # Start assigned camera stream if configured
             s_id = target_assignments.get(s_idx)
-            if s_id:
+            if s_id and not getattr(self, "_building_ui", False):
                 stream_obj = self.device_manager.get_stream_by_id(s_id)
                 if stream_obj:
                     if not tile.stream_info or tile.stream_info.get("id") != s_id:
@@ -2990,6 +3032,23 @@ class MainWindow(QMainWindow):
         if self.ptz_dock.is_digital_mode():
             tile.goto_preset(preset_idx)
 
+    def _alert_is_visible(self, entry):
+        from core.alert_filters import visible_alert
+        selected = [key for key, check in self.alert_filter_checks.items() if check.isChecked()]
+        return visible_alert(entry, selected)
+
+    def _apply_alert_filters(self, *args, persist=True):
+        selected = [key for key, check in self.alert_filter_checks.items() if check.isChecked()]
+        self.app_settings["visible_alert_categories"] = selected
+        visible = 0
+        for card in self.alert_cards.values():
+            show = self._alert_is_visible(card.alert_data)
+            card.setVisible(show)
+            visible += int(show)
+        self.lbl_alert_count_badge.setText(f"{visible} shown / {len(self.alert_cards)} events")
+        if persist and not getattr(self, "_restoring_session", False):
+            self.save_session_state()
+
     def _load_initial_alerts(self):
         recent = self.alert_manager.get_recent_alerts(limit=200)
         # Avoid duplicate cards if called more than once
@@ -2998,12 +3057,20 @@ class MainWindow(QMainWindow):
             card.deleteLater()
         self.alert_cards.clear()
 
-        for alert in reversed(recent):
-            self._add_alert_card(alert)
+        self._alert_load_queue = list(reversed(recent))
+        self._load_alert_batch()
+
+    def _load_alert_batch(self):
+        if getattr(self, "_closing", False):
+            return
+        queue = getattr(self, "_alert_load_queue", [])
+        for _ in range(min(8, len(queue))):
+            self._add_alert_card(queue.pop(0))
         self.alert_count = len(self.alert_cards)
         self.side_tabs.setTabText(1, f"Alerts ({self.alert_count})")
-        if hasattr(self, "lbl_alert_count_badge"):
-            self.lbl_alert_count_badge.setText(f"{self.alert_count} Events")
+        self._apply_alert_filters(persist=False)
+        if queue:
+            QTimer.singleShot(16, self._load_alert_batch)
 
     def _add_alert_card(self, alert_entry: dict):
         alert_id = alert_entry.get("id")
@@ -3013,6 +3080,7 @@ class MainWindow(QMainWindow):
         card.delete_requested.connect(self._on_single_alert_delete)
         self.alert_cards[alert_id] = card
         self.alerts_feed_layout.insertWidget(0, card)
+        card.setVisible(self._alert_is_visible(alert_entry))
 
     def _on_single_alert_delete(self, alert_id: str):
         if not alert_id:
@@ -3184,7 +3252,7 @@ class MainWindow(QMainWindow):
             silent = bool(alert_entry.get("silent", False))
 
             # 1. Spawn sleek animated on-screen alert notification toast (suppressed if silent recording)
-            if not silent:
+            if not silent and self._alert_is_visible(alert_entry):
                 self._show_sleek_alert_toast(alert_entry)
             else:
                 self.statusBar().showMessage(f"{desc or f'{target} clip saved on {s_name} ({lens_tag})'}", 4000)
@@ -3196,9 +3264,11 @@ class MainWindow(QMainWindow):
             if hasattr(self, "lbl_alert_count_badge"):
                 self.lbl_alert_count_badge.setText(f"{self.alert_count} Events")
 
+            self._apply_alert_filters(persist=False)
+
             # 3. Sound Alarm (Audible Siren in background thread) - only for unmuted, non-silent events
             if self.sound_alarms_enabled and not silent:
-                threading.Thread(target=self._play_siren_sound, daemon=True).start()
+                self._play_siren_sound()
         except Exception as e:
             print(f"[MainWindow] Error handling alert trigger: {e}")
 
@@ -3419,7 +3489,7 @@ class MainWindow(QMainWindow):
         if not self.sound_alarms_enabled:
             return
         profile = self.app_settings.get("sound_profile", SoundProfile.CYBER_CHIME)
-        vol = self.app_settings.get("sound_volume", 100)
+        vol = self.sound_manager.volume_from_settings(self.app_settings)
         custom_wav = self.app_settings.get("custom_sound_path")
         self.sound_manager.play_sound(profile, volume=vol, custom_path=custom_wav)
 
@@ -4175,7 +4245,7 @@ class MainWindow(QMainWindow):
 
     def _on_motion_alert(self, stream_id: str, is_motion: bool, num_targets: int):
         if is_motion and self.motion_sound_enabled:
-            self.sound_manager.play_motion_pip()
+            self.sound_manager.play_motion_pip(volume=self.sound_manager.volume_from_settings(self.app_settings))
 
     def snapshot_all(self):
         count = 0
@@ -4876,6 +4946,10 @@ class MainWindow(QMainWindow):
 
     def _execute_full_quit(self, event):
         """Safely stops all worker threads, flushes pending recordings and configs, and quits the application."""
+        self._closing = True
+        if hasattr(self, "_telemetry_executor"):
+            self._telemetry_executor.shutdown(wait=False, cancel_futures=True)
+        self.sound_manager.stop()
         restore_windows_sleep()
 
         # 1. Stop background servers and timers
@@ -4889,6 +4963,7 @@ class MainWindow(QMainWindow):
             self.ptz_dock.clear_camera()
         if hasattr(self, "intercom_dock") and self.intercom_dock:
             self.intercom_dock.clear_camera()
+            self.intercom_dock.talk_controller.shutdown()
 
         # 2. Smart Graceful Media Finalization: Save any pending snapshots, active clips, and recordings
         workers = list(self.active_workers.values()) + list(getattr(self, "_retiring_workers", ()))

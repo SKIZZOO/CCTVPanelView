@@ -46,6 +46,17 @@ def run_self_test(argv):
             result = subprocess.run([binary, "-version"], capture_output=True, timeout=30,
                                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             checks[binary] = result.returncode == 0
+        from core.sound_manager import SoundManager, SoundProfile
+        import io, wave
+        sounds = SoundManager()
+        sound_path = sounds.get_sound_file_path(SoundProfile.SIREN)
+        with wave.open(io.BytesIO(sounds.scaled_wav(sound_path, 25)), "rb") as sound:
+            checks["scaled_alert_audio"] = sound.getnframes() > 100
+        from core.rtsp_audio import select_audio_track
+        from core.audio_talk_controller import encode_g711
+        checks["intercom_audio_codec"] = encode_g711(b"\x00\x00", "PCMU") == b"\xff"
+        track = select_audio_track("m=audio 0 RTP/AVP 8\r\na=control:talk\r\na=sendonly\r\n", "rtsp://127.0.0.1/camera/")
+        checks["intercom_track_selection"] = track[0].endswith("/camera/talk")
         from core.device_manager import DeviceManager
         with tempfile.TemporaryDirectory() as temp:
             # Exercise the same spawned native decoder used by real cameras.

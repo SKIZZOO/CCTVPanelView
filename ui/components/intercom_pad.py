@@ -66,8 +66,9 @@ class IntercomPad(QFrame):
     close_requested = pyqtSignal()
     camera_target_changed = pyqtSignal(str, str)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, settings=None):
         super().__init__(parent)
+        self.settings = settings if settings is not None else {}
         self.talk_controller = AudioTalkController(self)
         self.camera_ip: Optional[str] = None
         self.stream_id: Optional[str] = None
@@ -76,6 +77,8 @@ class IntercomPad(QFrame):
         self.setObjectName("intercom_panel")
         self._setup_ui()
         self._connect_talk_controller()
+        self.slider_gain.setValue(round(float(self.settings.get("intercom_gain", 1.2)) * 10))
+        self._on_gain_changed(self.slider_gain.value())
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -177,12 +180,19 @@ class IntercomPad(QFrame):
         ic_lay.setSpacing(8)
 
         # Detected Windows Microphone Indicator
-        mic_name = self.talk_controller.get_default_device_name()
+        mic_name = "Windows default microphone"
         display_mic = mic_name if len(mic_name) <= 30 else mic_name[:27] + "..."
         self.lbl_mic_dev = QLabel(f"Microphone: {display_mic}")
         self.lbl_mic_dev.setStyleSheet("color: #64748b; font-size: 9px; font-weight: 600;")
         self.lbl_mic_dev.setToolTip(f"Windows Microphone: {mic_name}")
         ic_lay.addWidget(self.lbl_mic_dev)
+
+        self.combo_microphone = QComboBox()
+        self.combo_microphone.addItem("Windows default microphone", "")
+        self.talk_controller.input_device_id = self.settings.get("intercom_microphone", "")
+        self.combo_microphone.currentIndexChanged.connect(self._on_microphone_changed)
+        ic_lay.addWidget(QLabel("Microphone input"))
+        ic_lay.addWidget(self.combo_microphone)
 
         # Live Dynamic Segmented VU Level Meter
         self.vu_meter = AudioVUMeter()
@@ -202,12 +212,13 @@ class IntercomPad(QFrame):
         self.chk_hands_free = QCheckBox("Hands-Free Mode (Toggle)")
         self.chk_hands_free.setStyleSheet("color: #94a3b8; font-size: 10px;")
         self.chk_hands_free.setToolTip("Press once to start broadcast and once again to stop")
+        self.chk_hands_free.toggled.connect(lambda checked: self._stop_talking())
         ic_lay.addWidget(self.chk_hands_free)
 
         # Speaker gain row
         gain_row = QHBoxLayout()
         gain_row.setSpacing(6)
-        lbl_gain = QLabel("Speaker Volume:")
+        lbl_gain = QLabel("Microphone gain:")
         lbl_gain.setStyleSheet("color: #94a3b8; font-size: 10px; font-weight: 600;")
         self.gain_val_lbl = QLabel("1.2x")
         self.gain_val_lbl.setMinimumWidth(32)
@@ -260,14 +271,23 @@ class IntercomPad(QFrame):
                 is_ptz = s.get("is_ptz", False)
                 tag = "[PTZ]" if is_ptz else "[FIX]"
                 label = f"{cam_name} ({s_name}) {tag}"
+                from core.camera_urls import camera_endpoint, stream_path
+                from urllib.parse import urlsplit, unquote
+                url = s.get("url", "")
+                try:
+                    host, port = camera_endpoint(url)
+                    parsed = urlsplit(url)
+                except ValueError:
+                    continue
                 self.combo_camera.addItem(label, {
-                    "camera_ip": cam_ip,
+                    "camera_ip": host,
                     "stream_id": s_id,
                     "stream_name": f"{cam_name} ({s_name})",
-                    "username": cam.get("username", "admin"),
-                    "password": cam.get("password", ""),
-                    "rtsp_port": cam.get("port", 554),
-                    "stream_path": f"/live/ch0{s.get('channel', 0)}_0"
+                    "username": unquote(parsed.username) if parsed.username is not None else cam.get("username", "admin"),
+                    "password": unquote(parsed.password) if parsed.password is not None else cam.get("password", ""),
+                    "rtsp_port": port,
+                    "stream_path": stream_path(url),
+                    "stream_url": url
                 })
                 current_count += 1
 
@@ -301,7 +321,7 @@ class IntercomPad(QFrame):
         self.title_lbl.setText(f"Interfon: {disp_title}")
 
     def clear_camera(self):
-        if self.talk_controller and self.talk_controller.is_broadcasting:
+        if self.talk_controller:
             self.talk_controller.stop_broadcast()
         self.camera_ip = None
         self.stream_id = None
@@ -359,7 +379,7 @@ class IntercomPad(QFrame):
     def _on_talk_clicked(self):
         if not self.chk_hands_free.isChecked():
             return
-        if self.talk_controller.is_broadcasting:
+        if self.talk_controller.is_broadcasting or self.talk_controller.is_connecting:
             self._stop_talking()
         else:
             self._start_talking()
@@ -379,24 +399,26 @@ class IntercomPad(QFrame):
         self._style_talk_button(active=True)
         self.status_badge.setText("CONNECTING...")
         self.status_badge.setStyleSheet("color: #f59e0b; font-weight: bold; font-size: 10px;")
-        self.talk_controller.start_broadcast(ip, user, pwd, rtsp_port=port, stream_path=path)
+        self.talk_controller.start_broadcast(ip, user, pwd, rtsp_port=port, stream_path=path, stream_url=curr_data.get("stream_url", ""))
 
     def _stop_talking(self):
         self._style_talk_button(active=False)
         self.talk_controller.stop_broadcast()
 
     def _on_talk_state_changed(self, is_broadcasting: bool, status_msg: str):
+        self.status_badge.setToolTip(status_msg)
         if is_broadcasting:
             self.status_badge.setText("BROADCASTING")
             self.status_badge.setStyleSheet("color: #ef4444; font-weight: 900; font-size: 10px; background: rgba(239, 68, 68, 0.15); padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(239, 68, 68, 0.3);")
             self._style_talk_button(active=True)
         else:
-            self.status_badge.setText("READY")
+            self.status_badge.setText("CONNECTING" if self.talk_controller.is_connecting else "READY")
             self.status_badge.setStyleSheet("color: #94a3b8; font-weight: bold; font-size: 10px; background: rgba(148, 163, 184, 0.12); padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(148, 163, 184, 0.25);")
             self._style_talk_button(active=False)
 
     def _on_talk_error(self, err_msg: str):
         self.status_badge.setText("AUDIO ERROR")
+        self.status_badge.setToolTip(err_msg)
         self.status_badge.setStyleSheet("color: #f87171; font-weight: bold; font-size: 10px;")
         self._style_talk_button(active=False)
 
@@ -404,8 +426,10 @@ class IntercomPad(QFrame):
         gain = float(val) / 10.0
         self.gain_val_lbl.setText(f"{gain:.1f}x")
         self.talk_controller.set_gain(gain)
+        self.settings["intercom_gain"] = gain
 
     def _on_camera_dropdown_changed(self, index: int):
+        self.talk_controller.stop_broadcast()
         data = self.combo_camera.itemData(index)
         if not data:
             return
@@ -417,3 +441,29 @@ class IntercomPad(QFrame):
         disp_title = s_name if len(s_name) <= 20 else s_name[:18] + ".."
         self.title_lbl.setText(f"Intercom: {disp_title}")
         self.camera_target_changed.emit(cam_ip, s_id)
+
+    def _on_microphone_changed(self, index):
+        device_id = self.combo_microphone.currentData() or ""
+        self.settings["intercom_microphone"] = device_id
+        self.talk_controller.set_input_device(device_id)
+
+    def hideEvent(self, event):
+        self.talk_controller.stop_broadcast()
+        super().hideEvent(event)
+
+    def showEvent(self, event):
+        from PyQt6.QtMultimedia import QMediaDevices
+        self.combo_microphone.blockSignals(True)
+        selected = self.settings.get("intercom_microphone", "")
+        self.combo_microphone.clear()
+        self.combo_microphone.addItem("Windows default microphone", "")
+        for device in QMediaDevices.audioInputs():
+            self.combo_microphone.addItem(device.description(), bytes(device.id()).hex())
+        index = self.combo_microphone.findData(selected)
+        if index < 0 and selected:
+            self.combo_microphone.addItem("Saved microphone unavailable — choose another", selected)
+            index = self.combo_microphone.count() - 1
+        self.combo_microphone.setCurrentIndex(max(0, index))
+        self.combo_microphone.blockSignals(False)
+        self.lbl_mic_dev.setText(self.talk_controller.get_default_device_name())
+        super().showEvent(event)

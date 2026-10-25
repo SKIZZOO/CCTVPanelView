@@ -10,6 +10,10 @@ import wave
 import struct
 import math
 import threading
+import io
+import sys
+import queue
+import numpy as np
 from typing import List, Optional
 
 try:
@@ -57,10 +61,11 @@ class SoundManager:
             return
         self._initialized = True
         self.sounds_dir = os.path.abspath(sounds_dir)
-        os.makedirs(self.sounds_dir, exist_ok=True)
         self.sample_rate = 44100
         self._lock = threading.Lock()
-        self._ensure_default_sounds()
+        self._requests = queue.Queue(maxsize=1)
+        self._playback_thread = None
+        self.last_error = ""
 
     def get_available_profiles(self) -> List[str]:
         return list(SoundProfile.ALL)
@@ -194,9 +199,48 @@ class SoundManager:
             samples.append(s)
         return samples
 
+    @staticmethod
+    def normalize_profile(name):
+        return {"classic_beep": SoundProfile.DISCREET_BEEP,
+                "tactical_siren": SoundProfile.SIREN, "modern_chime": SoundProfile.CYBER_CHIME,
+                "military_laser": SoundProfile.TACTICAL_RADAR, "cyber_chime": SoundProfile.CYBER_CHIME}.get(name, name)
+
+    @staticmethod
+    def volume_from_settings(settings):
+        if "sound_volume" in settings:
+            return max(0, min(100, int(settings["sound_volume"])))
+        old = float(settings.get("alert_volume", .8))
+        return max(0, min(100, round(old * 100 if old <= 1 else old)))
+
+    @staticmethod
+    def scaled_wav(path, volume):
+        with wave.open(path, "rb") as source:
+            channels, width, rate, count, compression, _ = source.getparams()
+            if compression != "NONE" or width not in (1, 2, 3, 4):
+                raise ValueError("Choose an uncompressed PCM WAV file")
+            raw = source.readframes(count)
+        gain = max(0, min(100, float(volume))) / 100
+        if width == 3:
+            triples = np.frombuffer(raw, np.uint8).reshape(-1, 3).astype(np.int32)
+            values = triples[:, 0] | (triples[:, 1] << 8) | (triples[:, 2] << 16)
+            values = (values ^ 0x800000) - 0x800000
+            scaled = np.rint(values * gain).astype(np.int32)
+            data = np.column_stack((scaled & 255, (scaled >> 8) & 255, (scaled >> 16) & 255)).astype(np.uint8).tobytes()
+        else:
+            dtype = {1: np.uint8, 2: np.dtype("<i2"), 4: np.dtype("<i4")}[width]
+            values = np.frombuffer(raw, dtype).astype(np.float64)
+            offset = 128 if width == 1 else 0
+            data = np.rint((values - offset) * gain + offset).astype(dtype).tobytes()
+        output = io.BytesIO()
+        with wave.open(output, "wb") as target:
+            target.setnchannels(channels); target.setsampwidth(width); target.setframerate(rate)
+            target.writeframes(data)
+        return output.getvalue()
+
     def get_sound_file_path(self, profile_name: str, custom_path: Optional[str] = None) -> Optional[str]:
-        if profile_name == SoundProfile.CUSTOM and custom_path and os.path.isfile(custom_path):
-            return custom_path
+        profile_name = self.normalize_profile(profile_name)
+        if profile_name == SoundProfile.CUSTOM:
+            return custom_path if custom_path and os.path.isfile(custom_path) else None
 
         file_map = {
             SoundProfile.CYBER_CHIME: "cyber_chime.wav",
@@ -210,48 +254,66 @@ class SoundManager:
         path = os.path.join(self.sounds_dir, fname)
         if os.path.isfile(path):
             return path
-        return None
+        bundled = os.path.join(getattr(sys, "_MEIPASS", os.path.dirname(os.path.dirname(__file__))), "sounds", fname)
+        if os.path.isfile(bundled):
+            return bundled
+        os.makedirs(self.sounds_dir, exist_ok=True)
+        self._ensure_default_sounds()
+        return path if os.path.isfile(path) else None
 
     def play_sound(self, profile_name: str = SoundProfile.CYBER_CHIME, volume: int = 100, custom_path: Optional[str] = None):
-        """
-        Plays the selected sound profile asynchronously in a separate thread.
-        """
-        if not HAS_WINSOUND or volume <= 0:
+        if not HAS_WINSOUND:
+            self.last_error = "Windows sound playback is unavailable"
             return
+        if volume <= 0:
+            self.stop()
+            return
+        request = (profile_name, max(0, min(100, volume)), custom_path)
+        with self._lock:
+            try:
+                self._requests.get_nowait()
+            except queue.Empty:
+                pass
+            self._requests.put_nowait(request)
+            if self._playback_thread is None or not self._playback_thread.is_alive():
+                self._playback_thread = threading.Thread(target=self._play_pending, daemon=True)
+                self._playback_thread.start()
 
-        def _do_play():
+    def _play_pending(self):
+        while True:
             with self._lock:
                 try:
-                    wav_path = self.get_sound_file_path(profile_name, custom_path)
-                    if wav_path and os.path.isfile(wav_path):
-                        # Play WAV file asynchronously
-                        winsound.PlaySound(wav_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
-                    else:
-                        # Fallback synthesized tone
-                        winsound.Beep(1800, 180)
-                except Exception as e:
-                    # Final safety fallback
-                    try:
-                        winsound.Beep(1500, 100)
-                    except Exception:
-                        pass
+                    profile, volume, custom = self._requests.get_nowait()
+                except queue.Empty:
+                    self._playback_thread = None
+                    return
+            try:
+                path = self.get_sound_file_path(profile, custom)
+                if not path:
+                    raise ValueError("Sound file not found")
+                data = self.scaled_wav(path, volume)
+                # Windows does not support asynchronous SND_MEMORY. This bounded
+                # background worker owns the buffer until synchronous playback ends.
+                winsound.PlaySound(data, winsound.SND_MEMORY | winsound.SND_NODEFAULT)
+                self.last_error = ""
+            except Exception as error:
+                self.last_error = str(error)
 
-        threading.Thread(target=_do_play, daemon=True).start()
+    def stop(self):
+        with self._lock:
+            try:
+                self._requests.get_nowait()
+            except queue.Empty:
+                pass
+        if HAS_WINSOUND:
+            winsound.PlaySound(None, 0)
 
     def play_test_tone(self, profile_name: str = SoundProfile.CYBER_CHIME, volume: int = 100, custom_path: Optional[str] = None):
         """Plays test tone for settings preview."""
         self.play_sound(profile_name=profile_name, volume=volume, custom_path=custom_path)
 
     def play_motion_pip(self, volume: int = 60):
-        """Quick subtle pip on motion trigger."""
-        if not HAS_WINSOUND or volume <= 0:
-            return
-        def _pip():
-            try:
-                winsound.Beep(1200, 50)
-            except Exception:
-                pass
-        threading.Thread(target=_pip, daemon=True).start()
+        self.play_sound(SoundProfile.DISCREET_BEEP, volume=volume)
 
     def test_sound(self, profile_name: str, volume: int = 100, custom_path: Optional[str] = None):
         """Live test for the settings dialog."""

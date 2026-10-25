@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import threading
 
 # Zero-overhead thread and math environment to prevent background CPU spin-waiting & latency spikes
 os.environ["OMP_WAIT_POLICY"] = "PASSIVE"
@@ -50,7 +51,7 @@ class PerformanceProfile(str, Enum):
     GAMER = "gamer"     # Gamer Mode (Ryzen 5900X Chiplet 2 / CCD1 Isolated)
     LOW = "low"         # Low Usage (Eco / 2 Cores on Chiplet 2)
     MEDIUM = "medium"   # Medium Usage (Balanced / 4 Cores on Chiplet 2)
-    HIGH = "high"       # High Usage (Max Performance / All Cores)
+    HIGH = "high"       # Full performance
     CUSTOM = "custom"   # Custom Manual Settings
 
 
@@ -87,6 +88,8 @@ def query_system_cpu_topology() -> Dict[str, Any]:
                     offset = 0
                     while offset < size.value:
                         entry_size = int.from_bytes(raw[offset+4:offset+8], "little")
+                        if entry_size < 8 or offset + entry_size > len(raw):
+                            break
                         level = raw[offset+8]
                         cache_size = int.from_bytes(raw[offset+12:offset+16], "little")
                         mask = int.from_bytes(raw[offset+40:offset+48], "little")
@@ -131,8 +134,8 @@ def query_system_cpu_topology() -> Dict[str, Any]:
 # Default profile settings
 PROFILE_DEFAULTS = {
     PerformanceProfile.GAMER: {
-        "label": "Gamer Mode (Chiplet 2 / CCD1 Only - Zero FPS Loss)",
-        "description": "Pinned to Ryzen 9 5900X Chiplet 2 (Cores 12-15). Leaves Chiplet 1 (Cores 0-11) & its 32MB L3 cache 100% free for gaming with zero stutter.",
+        "label": "Background / gaming",
+        "description": "Limits background processing and uses the secondary CPU chiplet when available. Performance depends on camera streams and hardware.",
         "affinity_target": "chiplet2_balanced",
         "priority": "below_normal",
         "display_fps_cap": 25,
@@ -144,8 +147,8 @@ PROFILE_DEFAULTS = {
         "opencv_threads": 4
     },
     PerformanceProfile.LOW: {
-        "label": "Low Usage (Eco Mode / Chiplet 2)",
-        "description": "2 Cores on Chiplet 2 (Cores 12-13) | 10 FPS | Sub-stream Grid | Motion-Gated AI. Lowest CPU footprint (<8%). Zero impact on Chiplet 1.",
+        "label": "Low resource use",
+        "description": "Lower display frame rate and reduced detection work to conserve CPU. Uses substreams where configured.",
         "affinity_target": "chiplet2_eco",
         "priority": "below_normal",
         "display_fps_cap": 10,
@@ -157,7 +160,7 @@ PROFILE_DEFAULTS = {
         "opencv_threads": 2
     },
     PerformanceProfile.MEDIUM: {
-        "label": "Medium Usage (Balanced / Chiplet 2)",
+        "label": "Balanced",
         "description": "4 Cores on Chiplet 2 (Cores 12-15) | 15 FPS | Mid-HD Grid | Responsive AI. Balances surveillance and gaming.",
         "affinity_target": "chiplet2_balanced",
         "priority": "normal",
@@ -170,7 +173,7 @@ PROFILE_DEFAULTS = {
         "opencv_threads": 4
     },
     PerformanceProfile.HIGH: {
-        "label": "High Usage (Max Performance / All Cores)",
+        "label": "Full performance",
         "description": "All 24 Cores across both Chiplets | Native 2K | Uncapped FPS | Continuous AI. Full hardware potential, maximum surveillance fidelity.",
         "affinity_target": "all",
         "priority": "normal",
@@ -245,6 +248,8 @@ class ResourceManager:
         self._proc_core_equiv: float = 0.0
         self._child_cpu_percent: float = 0.0
         self._last_children_cycles: Dict[int, int] = {}
+        self._cpu_samples = {}
+        self._cpu_sample_lock = threading.Lock()
 
         # Windows Kernel32 ctypes setup
         self._k32 = None
@@ -291,6 +296,7 @@ class ResourceManager:
         Applies a performance profile: 'gamer', 'low', 'medium', 'high', or 'custom'.
         Configures CPU affinity, process priority, OpenCV threads, and returns effective settings.
         """
+        profile = {"balanced": "medium", "performance": "gamer", "eco": "low", "extreme": "high"}.get(profile, profile)
         try:
             perf_profile = PerformanceProfile(profile)
         except ValueError:
@@ -496,44 +502,40 @@ class ResourceManager:
         if self._psutil_proc is None:
             return 0.0
 
-        try:
-            # 1. Main process CPU percentage (single-core scale)
-            proc_core_pct = float(self._psutil_proc.cpu_percent(interval=None))
-
-            # 2. Child helper processes (FFmpeg muxers, FFplay decoders)
-            child_core_pct = 0.0
+        with self._cpu_sample_lock:
+            now = time.monotonic()
+            samples = {}
+            parent_core = child_core = 0.0
             try:
-                for child in self._psutil_proc.children(recursive=True):
-                    try:
-                        child_core_pct += float(child.cpu_percent(interval=None))
-                    except Exception:
-                        pass
+                processes = [self._psutil_proc] + self._psutil_proc.children(recursive=True)
             except Exception:
-                pass
-
-            total_core_pct = proc_core_pct + child_core_pct
-            self._proc_core_equiv = round(total_core_pct, 1)
-
-            # 3. System percentage footprint
-            num_cores = max(1, self.total_cores)
-            proc_sys_pct = round(proc_core_pct / num_cores, 1)
-            child_sys_pct = round(child_core_pct / num_cores, 1)
-            self._child_cpu_percent = child_sys_pct
-
-            # Query overall Windows system CPU
-            sys_cpu = round(float(psutil.cpu_percent(interval=None)), 1) if HAS_PSUTIL else 0.0
-
-            # Consistency guarantee: total app percentage cannot exceed system total CPU
-            total_app_pct = round(proc_sys_pct + child_sys_pct, 1)
-            if sys_cpu > 0 and total_app_pct > sys_cpu:
-                total_app_pct = sys_cpu
-
-            self._proc_cpu_percent = total_app_pct
-            self._last_sys_cpu = max(sys_cpu, total_app_pct)
-        except Exception:
-            pass
-
-        return self._proc_cpu_percent
+                processes = [self._psutil_proc]
+            for process in processes:
+                try:
+                    key = (process.pid, process.create_time())
+                    cpu = process.cpu_times()
+                    used = float(cpu.user + cpu.system)
+                    previous = self._cpu_samples.get(key)
+                    samples[key] = (used, now)
+                    percent = 0.0
+                    if previous and now > previous[1]:
+                        percent = max(0.0, (used - previous[0]) / (now - previous[1]) * 100)
+                    if process.pid == self._psutil_proc.pid:
+                        parent_core = percent
+                    else:
+                        child_core += percent
+                except Exception:
+                    continue
+            self._cpu_samples = samples
+            cores = max(1, self.total_cores)
+            self._proc_core_equiv = round(parent_core + child_core, 1)
+            self._child_cpu_percent = round(child_core / cores, 1)
+            self._proc_cpu_percent = round(min(100.0, (parent_core + child_core) / cores), 1)
+            try:
+                self._last_sys_cpu = max(float(psutil.cpu_percent(interval=None)), self._proc_cpu_percent)
+            except Exception:
+                self._last_sys_cpu = self._proc_cpu_percent
+            return self._proc_cpu_percent
 
     def get_process_core_equivalent(self) -> float:
         """Returns the equivalent CPU percentage of a single physical core (0 to 100% * cores)."""
@@ -545,14 +547,7 @@ class ResourceManager:
 
     def get_system_cpu_percent(self) -> float:
         """Returns the overall system-wide CPU usage percentage, guaranteed >= process usage."""
-        if HAS_PSUTIL:
-            try:
-                sys_cpu = round(float(psutil.cpu_percent(interval=None)), 1)
-                last_proc = getattr(self, "_proc_cpu_percent", 0.0)
-                return max(sys_cpu, last_proc)
-            except Exception:
-                return getattr(self, "_proc_cpu_percent", 0.0)
-        return 0.0
+        return round(getattr(self, "_last_sys_cpu", 0.0), 1)
 
     def get_memory_usage_mb(self) -> float:
         """Returns process memory footprint in megabytes (MB)."""

@@ -8,7 +8,7 @@
 
 A desktop viewer for RTSP/ONVIF IP cameras, with motion alerts, optional on-device object detection, local recording, and a browser interface for phones and tablets.
 
-[**Download for Windows**](https://github.com/SKIZZOO/CCTVPanelView/releases/latest) · [Features](#what-you-can-do) · [Quick start](#install-the-windows-release) · [Security](#security-and-privacy) · [2.1.3 camera connection fixes](docs/RELEASE-2.1.3.md)
+[**Download for Windows**](https://github.com/SKIZZOO/CCTVPanelView/releases/latest) · [Features](#what-you-can-do) · [Quick start](#install-the-windows-release) · [Security](#security-and-privacy) · [2.2.0 workstation improvements](docs/RELEASE-2.2.0.md)
 
 ![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4)
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776ab)
@@ -24,7 +24,7 @@ A desktop viewer for RTSP/ONVIF IP cameras, with motion alerts, optional on-devi
 
 | Live monitoring | Recording and alerts | Browser access |
 | --- | --- | --- |
-| View cameras in 1, 2, 4, or 9 tile layouts. Maximize a tile, zoom, and use supported camera controls. | Record video, save snapshots, set storage and retention options, and configure motion or object alerts. | Open the optional web viewer on a phone, tablet, or another browser. View supported camera feeds, alerts, and PTZ actions. |
+| View cameras in up to 16 tiles or a custom layout. Maximize a tile, zoom, and use supported camera controls. | Record video, save snapshots, set storage and retention options, and configure motion or object alerts. | Open the optional web viewer on a phone, tablet, or another browser. View supported camera feeds, alerts, and PTZ actions. |
 
 CCTVPanelView is designed for trusted home and small-site networks. Camera compatibility and performance depend on the camera model, stream format, PC, and network. It has not been benchmarked for a fixed camera count.
 
@@ -45,7 +45,11 @@ CCTVPanelView is designed for trusted home and small-site networks. Camera compa
 
 ### Settings
 
-Use Settings to adjust appearance, recording and storage, motion/object detection, and notification options.
+Settings is grouped into **General & Layout**, **Alerts & Sounds**, **Detection**, **Recording & Storage**, **Cameras & Image**, and **PC Performance**. Use the search field to find controls by name.
+
+In the incident feed, choose **Motion**, **Person**, **Animal**, or **Car / vehicle** to filter existing and incoming alerts. The choices persist across restarts. Display filters do not stop detection, recording, or separately configured notifications.
+
+Siren previews and actual alerts use the same 0–100% volume setting. Choose a built-in profile or a custom PCM WAV file; 0% mutes playback. The Windows default playback device is used.
 
 <table>
 <tr>
@@ -53,10 +57,20 @@ Use Settings to adjust appearance, recording and storage, motion/object detectio
 <td width="50%"><img src="docs/screenshots/settings_storage.png" alt="Storage settings"><br><sub>Recording location and retention settings.</sub></td>
 </tr>
 <tr>
-<td width="50%"><img src="docs/screenshots/settings_ai_motion.png" alt="AI and motion settings"><br><sub>Motion and local object-detection options.</sub></td>
-<td width="50%"><img src="docs/screenshots/settings_notifications.png" alt="Notification settings"><br><sub>Configure supported notification channels.</sub></td>
+<td width="50%"><img src="docs/screenshots/settings_detection.png" alt="AI and motion settings"><br><sub>Motion and local object-detection options.</sub></td>
+<td width="50%"><img src="docs/screenshots/settings_alerts_sound.png" alt="Notification settings"><br><sub>Notification delivery and working alarm-volume controls.</sub></td>
 </tr>
 </table>
+
+## Layout persistence, usage preview and intercom
+
+The last grid and camera assignments are saved when the layout changes and on exit, including custom-layout assignments and hidden slots. CPU usage includes the app and its decoder/helper processes, sampled in the background. AI models and alert-media indexing load away from the UI thread to reduce startup stalls.
+
+The intercom supports cameras that advertise an **ONVIF audio backchannel with 8 kHz mono G.711 PCMA or PCMU**. It selects the advertised speaker track, codec and TCP channel, supports Basic/MD5 Digest authentication, and converts supported native microphone formats. Select a microphone and use push-to-talk or hands-free mode. Changing cameras, microphones, or closing the panel stops transmission.
+
+A camera having a speaker does not guarantee an open backchannel. Devices that expose talk only through a proprietary vendor app are not currently supported. The app reports missing capabilities rather than assuming an arbitrary audio track.
+
+<img src="docs/screenshots/dashboard_filters.png" width="1100" alt="Incident feed with persistent category filters">
 
 ## Camera setup and connection tests
 
@@ -73,7 +87,7 @@ Process isolation uses additional memory per active stream. Cameras still share 
 ## Install the Windows release
 
 1. Open [the latest release](https://github.com/SKIZZOO/CCTVPanelView/releases/latest).
-2. Download **CCTVPanelView-2.1.3-Setup.exe** and run it.
+2. Download **CCTVPanelView-2.2.0-Setup.exe** and run it.
 3. Choose an installation folder and shortcuts, then launch the app from the Desktop or Start Menu.
 
 The installer bundles Python, Qt, AI models, and FFmpeg/FFplay/FFprobe. Normal use needs no Python setup or batch files. Updates preserve existing camera configuration. Close the running app before an update so recordings can finish. A graphical uninstaller is available through Windows Installed Apps.
