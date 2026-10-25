@@ -8,7 +8,7 @@
 
 A desktop viewer for RTSP/ONVIF IP cameras, with motion alerts, optional on-device object detection, local recording, and a browser interface for phones and tablets.
 
-[**Download for Windows**](https://github.com/SKIZZOO/CCTVPanelView/releases/latest) · [Features](#what-you-can-do) · [Quick start](#install-the-windows-release) · [Security](#security-and-privacy) · [2.2.0 workstation improvements](docs/RELEASE-2.2.0.md)
+[**Download for Windows**](https://github.com/SKIZZOO/CCTVPanelView/releases/latest) · [Features](#what-you-can-do) · [Quick start](#install-the-windows-release) · [Security](#security-and-privacy) · [2.2.1 startup and layout fix](docs/RELEASE-2.2.1.md)
 
 ![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4)
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776ab)
@@ -87,7 +87,7 @@ Process isolation uses additional memory per active stream. Cameras still share 
 ## Install the Windows release
 
 1. Open [the latest release](https://github.com/SKIZZOO/CCTVPanelView/releases/latest).
-2. Download **CCTVPanelView-2.2.0-Setup.exe** and run it.
+2. Download **CCTVPanelView-2.2.1-Setup.exe** and run it.
 3. Choose an installation folder and shortcuts, then launch the app from the Desktop or Start Menu.
 
 The installer bundles Python, Qt, AI models, and FFmpeg/FFplay/FFprobe. Normal use needs no Python setup or batch files. Updates preserve existing camera configuration. Close the running app before an update so recordings can finish. A graphical uninstaller is available through Windows Installed Apps.

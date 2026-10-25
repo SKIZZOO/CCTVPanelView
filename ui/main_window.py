@@ -443,6 +443,10 @@ class MainWindow(QMainWindow):
 
         self._restoring_session = True
         self._building_ui = True
+        self._startup_view_activated = False
+        self._startup_timer = QTimer(self)
+        self._startup_timer.setSingleShot(True)
+        self._startup_timer.timeout.connect(self._finish_startup)
         self._telemetry_pending = False
         self.telemetry_ready.connect(self._apply_telemetry_snapshot)
         self._setup_ui()
@@ -476,7 +480,6 @@ class MainWindow(QMainWindow):
         initial_prof = self.app_settings.get("performance_profile", "gamer" if rm.is_ryzen_dual_ccd else "medium")
         self.apply_performance_profile(initial_prof)
 
-        QTimer.singleShot(150, self._check_startup_performance_mode)
         if self.app_settings.get("auto_clean_on_startup", True):
             QTimer.singleShot(2500, lambda: self.check_old_alerts_retention(silent_if_none=True))
 
@@ -1931,6 +1934,15 @@ class MainWindow(QMainWindow):
             if hasattr(self, "web_server") and self.web_server:
                 self.sidebar_telemetry.lbl_web_url.setText(self.web_server.get_local_url())
 
+    def _finish_startup(self):
+        # The splash can keep us hidden for seconds. Restore from the first real
+        # show event, exactly once, rather than a timer measured from construction.
+        if self._startup_view_activated or not self.isVisible():
+            return
+        self._startup_view_activated = True
+        self.activate_startup_view()
+        self._check_startup_performance_mode()
+
     def _check_startup_performance_mode(self):
         if not self.isVisible():
             return
@@ -1956,9 +1968,6 @@ class MainWindow(QMainWindow):
                 self.apply_performance_profile(curr_prof)
         else:
             self.apply_performance_profile(curr_prof)
-
-        # Launch 4 Quad startup view once performance profile is set
-        self.activate_startup_view()
 
     def open_performance_dialog(self):
         """Opens the Performance & Hardware Telemetry dialog to switch profiles or adjust affinity."""
@@ -4781,6 +4790,8 @@ class MainWindow(QMainWindow):
     def showEvent(self, event):
         super().showEvent(event)
         self._apply_window_corners()
+        if not self._startup_view_activated:
+            self._startup_timer.start(0)
 
     def is_window_maximized(self) -> bool:
         return getattr(self, "_is_custom_maximized", False) or self.isMaximized()
