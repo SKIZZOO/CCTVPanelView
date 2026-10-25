@@ -101,7 +101,12 @@ class WebSecurityTests(unittest.TestCase):
         for _ in range(32):
             self.assertTrue(httpd._slots.acquire(blocking=False))
         try:
-            self.assertEqual(self.request("GET", "/")[0], 503)
+            try:
+                self.assertEqual(self.request("GET", "/")[0], 503)
+            except (ConnectionResetError, ConnectionAbortedError, http.client.RemoteDisconnected):
+                # Windows can reset a socket closed with unread request bytes.
+                # Immediate rejection is also valid when all slots are occupied.
+                pass
         finally:
             for _ in range(32):
                 httpd._slots.release()

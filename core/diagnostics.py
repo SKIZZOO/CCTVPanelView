@@ -26,6 +26,23 @@ def run_self_test(argv):
             checks[binary] = result.returncode == 0
         from core.device_manager import DeviceManager
         with tempfile.TemporaryDirectory() as temp:
+            # Exercise the same spawned native decoder used by real cameras.
+            # This also catches frozen multiprocessing/bootstrap regressions.
+            from core.capture_process import IsolatedCapture
+            video = str(Path(temp) / "decoder.avi")
+            writer = cv2.VideoWriter(video, cv2.VideoWriter_fourcc(*"MJPG"), 15, (64, 48))
+            if not writer.isOpened():
+                raise RuntimeError("Cannot create decoder diagnostic video")
+            for value in range(30):
+                writer.write(np.full((48, 64, 3), value * 5, np.uint8))
+            writer.release()
+            capture = IsolatedCapture(open_timeout=15)
+            try:
+                opened = capture.open(video)
+                ok, frame = capture.read() if opened else (False, None)
+                checks["isolated_decoder"] = bool(ok and frame.shape == (48, 64, 3))
+            finally:
+                capture.release()
             path = Path(temp) / "config.json"
             manager = DeviceManager(str(path))
             manager.config["app_settings"]["default_layout"] = "3x3"

@@ -370,7 +370,7 @@ class InstallerDeploymentWorker(QThread):
                 reg_path = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\CCTVPanelView"
                 with winreg.CreateKey(winreg.HKEY_CURRENT_USER, reg_path) as k:
                     winreg.SetValueEx(k, "DisplayName", 0, winreg.REG_SZ, "CCTVPanelView AI Surveillance Workstation")
-                    winreg.SetValueEx(k, "DisplayVersion", 0, winreg.REG_SZ, "2.1.1")
+                    winreg.SetValueEx(k, "DisplayVersion", 0, winreg.REG_SZ, "2.1.2")
                     winreg.SetValueEx(k, "Publisher", 0, winreg.REG_SZ, "CCTVPanelView Workstation")
                     winreg.SetValueEx(k, "InstallLocation", 0, winreg.REG_SZ, self.target_dir)
                     uninst_exe = os.path.join(self.target_dir, "CCTVPanelView-Uninstall.exe")

@@ -1,3 +1,4 @@
+from core.capture_process import IsolatedCapture
 import cv2
 import time
 import os
@@ -81,6 +82,7 @@ class CameraStreamWorker(QThread):
         self.lens_tag = "Lens1"
         self.alert_manager = None
 
+        self._capture = None
         self._running = False
         self._paused = False
         self._reconnect_requested = False
@@ -286,6 +288,9 @@ class CameraStreamWorker(QThread):
         if target_url != self.current_url:
             self.current_url = target_url
             self._reconnect_requested = True
+            capture = self._capture
+            if capture is not None:
+                capture.interrupt()
         
         self.quality_changed.emit(self.stream_id, mode)
 
@@ -320,6 +325,9 @@ class CameraStreamWorker(QThread):
         if reason:
             print(f"[{self.stream_name}] Reconnect requested: {reason}")
         self._reconnect_requested = True
+        capture = self._capture
+        if capture is not None:
+            capture.interrupt()
 
     def update_connection_details(self, main_url: str, sub_url: str = "", ip: str = "", name: str = ""):
         """Updates connection credentials/URLs and triggers an immediate live reconnect."""
@@ -335,6 +343,9 @@ class CameraStreamWorker(QThread):
         else:
             self.current_url = self.main_url
         self._reconnect_requested = True
+        capture = self._capture
+        if capture is not None:
+            capture.interrupt()
 
     def set_web_streaming_active(self, active: bool = True):
         """Notifies the worker that a web/mobile client is streaming this camera."""
@@ -693,9 +704,11 @@ class CameraStreamWorker(QThread):
     
                 cap = None
                 try:
-                    cap = cv2.VideoCapture(self.current_url, cv2.CAP_FFMPEG)
-                    if hasattr(cv2, "CAP_PROP_BUFFERSIZE"):
-                        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    cap = IsolatedCapture()
+                    self._capture = cap
+                    if not self._running or self._reconnect_requested:
+                        cap.interrupt()
+                    cap.open(self.current_url)
                 except Exception as e:
                     self._update_status(StreamStatus.ERROR, f"Connection failed: {str(e)}")
                     _interruptible_sleep(reconnect_delay)
@@ -713,9 +726,8 @@ class CameraStreamWorker(QThread):
                     _interruptible_sleep(reconnect_delay)
                     continue
     
-                # Connected
-                reconnect_attempts = 0
-                reconnect_delay = 2.0
+                # Reset retry backoff only after a sustained healthy connection.
+                connected_at = time.monotonic()
                 self.width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1920
                 self.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 1080
                 stream_fps = cap.get(cv2.CAP_PROP_FPS)
@@ -726,7 +738,6 @@ class CameraStreamWorker(QThread):
     
                 frame_times = []
                 last_stats_time = time.time()
-                consecutive_failures = 0
                 last_motion_state = False
     
                 while self._running and not self._reconnect_requested:
@@ -734,39 +745,15 @@ class CameraStreamWorker(QThread):
                         time.sleep(0.05)
                         continue
     
-                    t_grab_start = time.perf_counter()
-                    grabbed = cap.grab()
-                    if not grabbed:
-                        consecutive_failures += 1
-                        if consecutive_failures > 30:
-                            self._update_status(StreamStatus.RECONNECTING, "Feed interrupted. Reconnecting...")
-                            break
-                        time.sleep(0.015)
-                        continue
-    
-                    consecutive_failures = 0
+                    if not cap.grab():
+                        self._update_status(StreamStatus.RECONNECTING, "Feed interrupted. Reconnecting...")
+                        break
                     now = time.time()
                     self._last_frame_received_time = now
-                    dt_first = time.perf_counter() - t_grab_start
+                    if time.monotonic() - connected_at >= 5.0:
+                        reconnect_attempts = 0
+                        reconnect_delay = 2.0
 
-                    # --- Smart Live Edge Zero-Latency Synchronization ---
-                    # If the initial grab completed almost instantly (< 4ms), it means frames are queued up
-                    # in the OS/FFmpeg socket buffer. Drain stale frames at lightning speed (<1ms each)
-                    # until we catch the brand-new live frame just arrived from the camera!
-                    if dt_first < 0.004:
-                        drained_count = 0
-                        while drained_count < 20:
-                            t_drain = time.perf_counter()
-                            if not cap.grab():
-                                break
-                            dt_drain = time.perf_counter() - t_drain
-                            drained_count += 1
-                            now = time.time()
-                            self._last_frame_received_time = now
-                            if dt_drain >= 0.004:
-                                # We blocked on network socket and captured the newest live frame!
-                                break
-    
                     # --- 0. Frame Timing & Display Throttling Check ---
                     should_render = not self._gui_rendering_paused
                     if should_render and self.min_render_interval > 0.0:
@@ -783,7 +770,7 @@ class CameraStreamWorker(QThread):
     
                     # Selective Frame Retrieval:
                     # If not recording, and this frame is neither rendered nor analyzed:
-                    # SKIP expensive decompression (cap.retrieve)! cap.grab() already drained the socket.
+                    # Skip copying the shared frame; the child keeps decoding at the live edge.
                     if not self._recording and not self._is_alert_recording and not should_render and not should_detect_motion and not self._web_streaming_active:
                         continue
     
@@ -1169,11 +1156,18 @@ class CameraStreamWorker(QThread):
                         pass
     
                 if self._running and not self._reconnect_requested:
-                    time.sleep(1.0)
+                    reconnect_attempts += 1
+                    reconnect_delay = min(25.0, 2.0 * (1.4 ** min(reconnect_attempts, 8)))
+                    _interruptible_sleep(reconnect_delay)
     
             except Exception as stream_err:
                 print(f"[{self.stream_name}] Stream loop exception: {stream_err}")
-                time.sleep(1.0)
+                _interruptible_sleep(1.0)
+            finally:
+                capture = self._capture
+                self._capture = None
+                if capture is not None:
+                    capture.release()
 
         self._update_status(StreamStatus.STOPPED, "Stream stopped")
 
@@ -1608,6 +1602,9 @@ class CameraStreamWorker(QThread):
 
     def stop(self, wait: bool = True):
         self._running = False
+        capture = self._capture
+        if capture is not None:
+            capture.interrupt()
         self.stop_recording()
         if hasattr(self, "_ai_executor"):
             try:

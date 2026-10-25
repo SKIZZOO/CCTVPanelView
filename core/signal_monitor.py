@@ -13,6 +13,7 @@ class SignalMonitor(QObject):
     to calculate round-trip latency (RTT), packet health, signal quality percentage,
     and visual signal bar ratings.
     """
+    _probe_finished = pyqtSignal(str, object)
     signals_updated = pyqtSignal(dict)  # ip -> signal_data dict
     camera_status_changed = pyqtSignal(str, bool, float)  # ip, is_online, latency_ms
 
@@ -22,6 +23,10 @@ class SignalMonitor(QObject):
         self.camera_ips: List[str] = []
         self.signal_cache: Dict[str, Dict[str, Any]] = {}
         self._last_offline_probe: Dict[str, float] = {}
+        self._stopped = False
+        self._pending = set()
+        self._queue = []
+        self._probe_finished.connect(self._accept_probe)
         self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="SignalProbe")
 
         self.timer = QTimer(self)
@@ -30,7 +35,9 @@ class SignalMonitor(QObject):
 
     def set_camera_ips(self, ips: List[str]):
         """Updates the monitored IP list and triggers an immediate probe."""
-        self.camera_ips = list(set([ip for ip in ips if ip and ip.strip()]))
+        self.camera_ips = list(dict.fromkeys(ip.strip() for ip in ips if ip and ip.strip()))
+        self.signal_cache = {ip: value for ip, value in self.signal_cache.items() if ip in self.camera_ips}
+        self._queue = [ip for ip in self._queue if ip in self.camera_ips]
         self.probe_all_cameras()
 
     def start(self):
@@ -40,6 +47,8 @@ class SignalMonitor(QObject):
 
     def stop(self):
         """Stops the monitoring timer and cleanly shuts down worker threads."""
+        self._stopped = True
+        self._queue.clear()
         self.timer.stop()
         try:
             self._executor.shutdown(wait=False, cancel_futures=True)
@@ -47,20 +56,40 @@ class SignalMonitor(QObject):
             pass
 
     def probe_all_cameras(self):
-        if not self.camera_ips:
+        if self._stopped:
             return
-        self._executor.submit(self._run_probes_sync)
-
-    def _run_probes_sync(self):
-        results = {}
-        now = time.time()
+        # Only one outstanding job per camera; timer ticks cannot pile up batches.
         for ip in self.camera_ips:
+            if ip not in self._pending and ip not in self._queue:
+                self._queue.append(ip)
+        self._dispatch_probes()
+
+    def _dispatch_probes(self):
+        while self._queue and len(self._pending) < 4 and not self._stopped:
+            ip = self._queue.pop(0)
+            self._pending.add(ip)
+            self._executor.submit(self._probe_and_report, ip)
+
+    def _probe_and_report(self, ip):
+        try:
             info = self._probe_single_ip(ip, timeout=1.5)
-            results[ip] = info
+        except Exception:
+            info = None
+        try:
+            self._probe_finished.emit(ip, info)
+        except RuntimeError:
+            pass  # The owning window was already destroyed.
+
+    def _accept_probe(self, ip, info):
+        # QObject's queued connection keeps cache writes and UI signals on its thread.
+        self._pending.discard(ip)
+        if self._stopped:
+            return
+        if ip in self.camera_ips and info is not None:
             self.signal_cache[ip] = info
             self.camera_status_changed.emit(ip, info["is_online"], info["latency_ms"])
-
-        self.signals_updated.emit(results)
+            self.signals_updated.emit(dict(self.signal_cache))
+        self._dispatch_probes()
 
     def _probe_single_ip(self, ip: str, port: int = 554, timeout: float = 1.5) -> Dict[str, Any]:
         """

@@ -2858,6 +2858,17 @@ class MainWindow(QMainWindow):
         if not getattr(self, "_restoring_session", False):
             self.save_session_state()
 
+    def _retire_worker(self, worker):
+        # Keep QThread alive until cleanup finishes, without blocking UI paint for
+        # every healthy camera while a broken camera's decoder is being reaped.
+        if not hasattr(self, "_retiring_workers"):
+            self._retiring_workers = set()
+        self._retiring_workers.add(worker)
+        worker.finished.connect(lambda w=worker: self._retiring_workers.discard(w))
+        worker.stop(wait=False)
+        if not worker.isRunning():
+            self._retiring_workers.discard(worker)
+
     def _cleanup_worker_if_unused(self, stream_id: str):
         if not stream_id or stream_id not in self.active_workers:
             return
@@ -2865,7 +2876,7 @@ class MainWindow(QMainWindow):
         if not is_used:
             worker = self.active_workers.pop(stream_id, None)
             if worker:
-                worker.stop()
+                self._retire_worker(worker)
 
     def _on_tile_stream_requested(self, tile_index: int, stream_data: dict):
         self.start_stream_on_tile(tile_index, stream_data)
@@ -4474,7 +4485,7 @@ class MainWindow(QMainWindow):
             if s_id in self.active_workers:
                 worker = self.active_workers.pop(s_id)
                 try:
-                    worker.stop()
+                    self._retire_worker(worker)
                 except Exception:
                     pass
             for tile in self.video_tiles:
@@ -4868,7 +4879,7 @@ class MainWindow(QMainWindow):
             self.intercom_dock.clear_camera()
 
         # 2. Smart Graceful Media Finalization: Save any pending snapshots, active clips, and recordings
-        workers = list(self.active_workers.values())
+        workers = list(self.active_workers.values()) + list(getattr(self, "_retiring_workers", ()))
         for worker in workers:
             try:
                 worker.flush_pending_snapshots()
@@ -4883,6 +4894,9 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             worker._running = False
+            capture = worker._capture
+            if capture is not None:
+                capture.interrupt()
 
         # 3. Synchronously persist full session state, alert history, cards, and camera configurations to disk
         self.save_session_state()

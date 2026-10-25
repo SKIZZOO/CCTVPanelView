@@ -303,37 +303,20 @@ class DeviceManager:
         Tests whether an RTSP stream can be opened and decoded.
         Waits for keyframe (I-frame) decoding up to timeout_sec.
         """
-        import time
-        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|stimeout;4000000|buffer_size;1024000"
-        cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
-        if not cap.isOpened():
-            return {"success": False, "error": "Could not connect to RTSP endpoint (Check IP, port, or password)."}
-        
-        start_t = time.time()
-        ret = False
-        frame = None
-        while (time.time() - start_t) < timeout_sec:
+        from core.capture_process import IsolatedCapture
+        cap = IsolatedCapture(open_timeout=timeout_sec, read_timeout=timeout_sec)
+        try:
+            if not cap.open(rtsp_url):
+                return {"success": False, "error": "Could not connect or receive video before the timeout. Check the camera address and credentials."}
             ret, frame = cap.read()
-            if ret and frame is not None and frame.size > 0:
-                break
-            time.sleep(0.08)
-            
-        if not ret or frame is None or frame.size == 0:
+            if not ret or frame is None:
+                return {"success": False, "error": "Connected, but no video frame was received."}
+            h, w = frame.shape[:2]
+            fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+            return {"success": True, "width": w, "height": h, "fps": fps,
+                    "message": f"Successfully connected! {w}x{h} @ {fps:.1f}fps"}
+        finally:
             cap.release()
-            return {"success": False, "error": "Connected to RTSP stream, but waiting for video keyframe timed out."}
-            
-        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or (frame.shape[1] if frame is not None else 0)
-        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or (frame.shape[0] if frame is not None else 0)
-        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-        cap.release()
-        
-        return {
-            "success": True,
-            "width": w,
-            "height": h,
-            "fps": fps,
-            "message": f"Successfully connected! {w}x{h} @ {fps:.1f}fps"
-        }
 
     @staticmethod
     def get_local_subnet() -> str:

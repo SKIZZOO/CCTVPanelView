@@ -2280,6 +2280,7 @@ class StreamingRequestHandler(BaseHTTPRequestHandler):
                         if start > end or start >= size:
                             raise ValueError()
                     except ValueError:
+                        video.close()
                         self.send_response(416)
                         self.send_header("Content-Range", f"bytes */{size}")
                         self.send_header("Content-Length", "0")
@@ -2301,6 +2302,10 @@ class StreamingRequestHandler(BaseHTTPRequestHandler):
                     chunk = video.read(min(65536, remaining))
                     if not chunk:
                         break
+                    if len(chunk) == remaining:
+                        # Release the Windows file handle before the client can
+                        # finish its download and immediately delete the file.
+                        video.close()
                     self.wfile.write(chunk)
                     remaining -= len(chunk)
         except (BrokenPipeError, ConnectionError, TimeoutError):

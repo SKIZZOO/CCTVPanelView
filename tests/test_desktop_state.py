@@ -12,6 +12,33 @@ from ui.components.settings_dialog import SettingsDialog
 
 
 class DesktopStateTests(unittest.TestCase):
+    def test_retiring_camera_does_not_wait_on_gui_thread(self):
+        import threading
+        import time
+        from PyQt6.QtCore import QThread
+        done = threading.Event()
+        calls = []
+        class Worker(QThread):
+            def run(self):
+                done.wait(3)
+            def stop(self, wait=True):
+                calls.append(wait)
+        worker = Worker()
+        worker.start()
+        try:
+            started = time.monotonic()
+            self.window._retire_worker(worker)
+            self.assertLess(time.monotonic() - started, .1)
+            self.assertEqual(calls, [False])
+            self.assertIn(worker, self.window._retiring_workers)
+            done.set()
+            self.assertTrue(worker.wait(1000))
+            self.app.processEvents()
+            self.assertNotIn(worker, self.window._retiring_workers)
+        finally:
+            done.set()
+            worker.wait(1000)
+
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
