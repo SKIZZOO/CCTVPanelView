@@ -659,6 +659,7 @@ class SettingsDialog(QDialog):
     - Right Stacked Cards with aerated rows and toggle switches.
     """
     settings_saved = pyqtSignal(dict)
+    check_updates_requested = pyqtSignal()
     camera_connection_updated = pyqtSignal(dict)
 
     def __init__(self, current_settings=None, cameras=None, selected_camera_id=None, parent=None):
@@ -1058,6 +1059,15 @@ class SettingsDialog(QDialog):
         btn_wizard.clicked.connect(self._launch_setup_wizard)
         card_wizard.add_row(SettingRow("Initial Setup Wizard", "Guided 5-stage setup: storage drive selection, hardware profile, network camera scan, and preferences", btn_wizard))
         layout.addWidget(card_wizard)
+
+        from core.version import APP_VERSION
+        updates_card = SettingCard("Application updates", f"Installed version {APP_VERSION}. Check the official GitHub stable release and verify installer downloads.")
+        self.sw_auto_updates = ToggleSwitch(checked=self.settings.get("auto_check_updates", True))
+        updates_card.add_row(SettingRow("Automatically check for updates", "Checks in the background after startup and every six hours. Downloads and installation wait for your action.", self.sw_auto_updates))
+        self.btn_check_updates = QPushButton("Check for updates…")
+        self.btn_check_updates.clicked.connect(self.check_updates_requested.emit)
+        updates_card.add_row(SettingRow("Download and install", "Save your layout and update the existing installation folder.", self.btn_check_updates))
+        layout.addWidget(updates_card)
 
         layout.addStretch(1)
         self.stack.addWidget(scroll)
@@ -2332,6 +2342,7 @@ class SettingsDialog(QDialog):
             self._apply_active_camera_connection()
 
         res = {
+            "auto_check_updates": self.sw_auto_updates.isChecked(),
             # Appearance
             "theme": self.settings.get("theme", "Cyber Dark"),
             "default_layout": self.cmb_layout.currentData() if hasattr(self, "cmb_layout") else self.settings.get("default_layout", "2x2"),
@@ -2445,6 +2456,7 @@ class SettingsDialog(QDialog):
 
         return {
             "default_layout": self.cmb_layout.currentData() if hasattr(self, "cmb_layout") else "",
+            "auto_check_updates": self.sw_auto_updates.isChecked(),
             "show_hud_clock": self.sw_hud_clock.isChecked() if hasattr(self, "sw_hud_clock") else False,
             "show_hud_camera_name": self.sw_hud_cam_name.isChecked() if hasattr(self, "sw_hud_cam_name") else False,
             "show_hud_wifi": self.sw_hud_wifi.isChecked() if hasattr(self, "sw_hud_wifi") else False,

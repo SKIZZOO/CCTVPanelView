@@ -8,7 +8,7 @@
 
 A desktop viewer for RTSP/ONVIF IP cameras, with motion alerts, optional on-device object detection, local recording, and a browser interface for phones and tablets.
 
-[**Download for Windows**](https://github.com/SKIZZOO/CCTVPanelView/releases/latest) · [Features](#what-you-can-do) · [Quick start](#install-the-windows-release) · [Security](#security-and-privacy) · [2.2.2 notification controls](docs/RELEASE-2.2.2.md)
+[**Download for Windows**](https://github.com/SKIZZOO/CCTVPanelView/releases/latest) · [Features](#what-you-can-do) · [Quick start](#install-the-windows-release) · [Security](#security-and-privacy) · [2.3.0 upgrades and updates](docs/RELEASE-2.3.0.md)
 
 ![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4)
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776ab)
@@ -95,10 +95,26 @@ Process isolation uses additional memory per active stream. Cameras still share 
 ## Install the Windows release
 
 1. Open [the latest release](https://github.com/SKIZZOO/CCTVPanelView/releases/latest).
-2. Download **CCTVPanelView-2.2.2-Setup.exe** and run it.
+2. Download **CCTVPanelView-2.3.0-Setup.exe** and run it.
 3. Choose an installation folder and shortcuts, then launch the app from the Desktop or Start Menu.
 
 The installer bundles Python, Qt, AI models, and FFmpeg/FFplay/FFprobe. Normal use needs no Python setup or batch files. Updates preserve existing camera configuration. Close the running app before an update so recordings can finish. A graphical uninstaller is available through Windows Installed Apps.
+
+### Upgrades keep your layout
+
+Setup detects the registered installation folder and backs up `cameras_config.json` under `config-backups/` before upgrading. Existing camera IDs, stream IDs, grid assignments, custom layouts and settings remain intact. It does not reopen first-run setup for upgrades. Re-running the setup wizard manually also preserves existing stream IDs and custom URLs. When relocating an installation, relative media paths keep pointing to the original media folder.
+
+### In-app updates
+
+Open **Settings → General & layout → Application updates → Check for updates**. Automatic checks run in the background 30 seconds after startup and every six hours; turn them off in the same section. The updater checks the official GitHub repository's latest stable release, compares numeric versions and offers **Download verified update**, followed by **Install and restart**.
+
+Downloads must use the expected repository/tag/installer name and HTTPS GitHub hosts, and match the published size and SHA-256 digest. The installer is checked again before launch. The app saves and backs up its current layout, then closes safely; Setup waits for it to exit and opens in the existing installation folder. Finish Setup to restart. No batch files are used. Installers are not Authenticode-signed: checksum verification checks agreement with the GitHub release, not an independent publisher signature. Source runs can check and download updates but require manual installer launch.
+
+<img src="docs/screenshots/settings_updates.png" width="1100" alt="Application version, automatic update checks and update controls in Settings">
+
+### Startup responsiveness
+
+The installed app now uses a runtime folder instead of unpacking a large executable into a temporary folder on every launch. Setup remains one downloadable EXE. A simple loading screen replaces the animated intro and its forced delay. Filesystem cleanup and quota scans run in a background worker after the first minute, respecting existing retention and confirmation preferences. These changes remove known startup work; launch time still depends on the PC, antivirus scanning, storage and configured cameras.
 
 ## Run from source
 

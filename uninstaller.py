@@ -126,7 +126,7 @@ class UninstallerWorker(QThread):
             # Step 4: Remove Application Binaries & Assets
             advance(80, "Removing core binaries & UI libraries...", "[FS] Deleting application core engine and neural models...")
             items_to_remove = [
-                "core", "ui", "assets", "sounds",
+                "core", "ui", "assets", "sounds", "_internal",
                 "CCTVPanelView.exe", "mobilenet.caffemodel", "yolov5n.onnx", "deploy.prototxt",
                 "main.py", "cctv_server.py", "CCTVPanelView.vbs", "crash.log"
             ]

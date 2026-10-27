@@ -58,6 +58,11 @@ def run_self_test(argv):
         track = select_audio_track("m=audio 0 RTP/AVP 8\r\na=control:talk\r\na=sendonly\r\n", "rtsp://127.0.0.1/camera/")
         checks["intercom_track_selection"] = track[0].endswith("/camera/talk")
         from core.device_manager import DeviceManager
+        from core.updates import version_tuple, parse_release
+        from core.installation import preserve_upgrade_profile
+        from core.version import APP_VERSION
+        checks["update_version_ordering"] = version_tuple("2.10.0") > version_tuple("2.9.0")
+        checks["installed_version"] = version_tuple(APP_VERSION) >= (2, 3, 0)
         with tempfile.TemporaryDirectory() as temp:
             # Exercise the same spawned native decoder used by real cameras.
             # This also catches frozen multiprocessing/bootstrap regressions.
@@ -81,6 +86,14 @@ def run_self_test(argv):
             manager.config["app_settings"]["default_layout"] = "3x3"
             manager.save_config()
             checks["configuration_roundtrip"] = DeviceManager(str(path)).config["app_settings"]["default_layout"] == "3x3"
+            manager.config["app_settings"]["session_slot_assignments"] = {"0": "fixture-stream", "1": ""}
+            manager.save_config()
+            before = path.read_bytes()
+            # The installer uses this same backup/preservation path.
+            installed_path = Path(temp) / "cameras_config.json"
+            installed_path.write_bytes(before)
+            preserve_upgrade_profile(temp)
+            checks["upgrade_profile_preserved"] = installed_path.read_bytes() == before and bool(list((Path(temp) / "config-backups").glob("*.json")))
     except Exception as error:
         checks["error"] = str(error)
     passed = bool(checks) and "error" not in checks and all(checks.values())

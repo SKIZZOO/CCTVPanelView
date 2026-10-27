@@ -11,11 +11,14 @@ class InstallerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             source = Path(temp) / "payload"
             source.mkdir()
-            for name in ("CCTVPanelView.exe", "CCTVPanelView-Uninstall.exe"):
-                (source / name).write_bytes(b"fixture")
+            runtime = source / "payload" / "CCTVPanelView"
+            (runtime / "_internal").mkdir(parents=True)
+            (runtime / "CCTVPanelView.exe").write_bytes(b"fixture")
+            (runtime / "_internal" / "library.dll").write_bytes(b"runtime fixture")
+            (source / "CCTVPanelView-Uninstall.exe").write_bytes(b"fixture")
             target = Path(temp) / "installed"
             target.mkdir()
-            config = {"cameras": [{"id": "preserved"}], "app_settings": {"default_layout": "3x3"}}
+            config = {"cameras": [{"id": "preserved", "streams": [{"id": "custom-feed"}]}], "app_settings": {"default_layout": "custom", "session_slot_assignments": {"0": "custom-feed", "1": ""}, "custom_layout": {"assignments": ["custom-feed", ""]}}}
             path = target / "cameras_config.json"
             path.write_text(json.dumps(config))
             result = []
@@ -28,6 +31,10 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual([(True, "Success")], result)
             self.assertEqual(config, json.loads(path.read_text()))
             self.assertTrue((target / "CCTVPanelView.exe").is_file())
+            self.assertEqual((target / "_internal" / "library.dll").read_bytes(), b"runtime fixture")
+            backups = list((target / "config-backups").glob("*.json"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_bytes(), path.read_bytes())
             self.assertFalse(list(target.glob("*.bat")))
             self.assertFalse(list(target.glob("*.vbs")))
 

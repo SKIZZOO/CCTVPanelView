@@ -8,7 +8,7 @@ a = Analysis(
     ['installer.py'],
     pathex=[],
     binaries=[],
-    datas=[('assets', 'assets'), (str(dist_dir / 'CCTVPanelView.exe'), '.'), (str(dist_dir / 'CCTVPanelView-Uninstall.exe'), '.')],
+    datas=[('assets', 'assets'), (str(dist_dir / 'CCTVPanelView'), 'payload/CCTVPanelView'), (str(dist_dir / 'CCTVPanelView-Uninstall.exe'), '.')],
     hiddenimports=['winreg'],
     hookspath=[],
     hooksconfig={},

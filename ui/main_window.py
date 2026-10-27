@@ -375,6 +375,7 @@ class SlimStatusBarProxy:
 
 class MainWindow(QMainWindow):
     telemetry_ready = pyqtSignal(object)
+    maintenance_ready = pyqtSignal(bool)
     """
     CCTVPanelView Workstation - Professional Next-Gen AI CCTV Suite.
     """
@@ -480,12 +481,10 @@ class MainWindow(QMainWindow):
         initial_prof = self.app_settings.get("performance_profile", "gamer" if rm.is_ryzen_dual_ccd else "medium")
         self.apply_performance_profile(initial_prof)
 
-        if self.app_settings.get("auto_clean_on_startup", True):
-            QTimer.singleShot(2500, lambda: self.check_old_alerts_retention(silent_if_none=True))
-
-        quota_gb = self.app_settings.get("storage_quota_gb", 0)
-        if quota_gb > 0 and self.app_settings.get("auto_purge_on_quota", False):
-            QTimer.singleShot(3000, lambda: self.alert_manager.enforce_quota(quota_gb))
+        self.maintenance_ready.connect(self._on_startup_maintenance_ready)
+        self._maintenance_timer = QTimer(self)
+        self._maintenance_timer.setSingleShot(True)
+        self._maintenance_timer.timeout.connect(self._start_background_maintenance)
 
         # Enable 24/7 background recording & prevent Windows sleep
         enable_windows_sleep_prevention()
@@ -1942,6 +1941,88 @@ class MainWindow(QMainWindow):
         self._startup_view_activated = True
         self.activate_startup_view()
         self._check_startup_performance_mode()
+        self._configure_update_schedule()
+        self._maintenance_timer.start(60000)
+
+    def _start_background_maintenance(self):
+        if getattr(self, "_maintenance_pending", False) or getattr(self, "_closing", False):
+            return
+        self._maintenance_pending = True
+        settings = dict(self.app_settings)
+        def run():
+            review = False
+            try:
+                from core.maintenance import startup_maintenance
+                review = startup_maintenance(self.alert_manager, settings)
+            except Exception as error:
+                print(f"[Maintenance] Background cleanup: {error}")
+            finally:
+                self._maintenance_pending = False
+                if not getattr(self, "_closing", False):
+                    try: self.maintenance_ready.emit(review)
+                    except RuntimeError: pass
+        threading.Thread(target=run, daemon=True, name="StartupMaintenance").start()
+
+    def _on_startup_maintenance_ready(self, review):
+        if review and not getattr(self, "_closing", False):
+            self.check_old_alerts_retention(silent_if_none=True, skip_snapshot_prune=True)
+
+    def _get_update_manager(self):
+        if not hasattr(self, "update_manager"):
+            from ui.components.update_dialog import UpdateManager
+            self.update_manager = UpdateManager(self)
+            self.update_manager.checked.connect(self._on_update_checked)
+        return self.update_manager
+
+    def _configure_update_schedule(self):
+        if not hasattr(self, "_update_check_timer"):
+            self._update_check_timer = QTimer(self)
+            self._update_check_timer.timeout.connect(self._automatic_update_check)
+        if self.app_settings.get("auto_check_updates", True):
+            self._update_check_timer.start(30000)
+        else:
+            self._update_check_timer.stop()
+
+    def _automatic_update_check(self):
+        self._update_check_timer.setInterval(6 * 60 * 60 * 1000)
+        if self.app_settings.get("auto_check_updates", True):
+            self._get_update_manager().check()
+
+    def _on_update_checked(self, release):
+        from core.updates import version_tuple
+        from core.version import APP_VERSION
+        if version_tuple(release.version) > version_tuple(APP_VERSION):
+            self.statusBar().showMessage(f"CCTVPanelView {release.version} is available. Open Settings > General & layout > Application updates.", 15000)
+
+    def open_update_dialog(self):
+        from ui.components.update_dialog import UpdateDialog
+        if not hasattr(self, "_update_dialog"):
+            self._update_dialog = UpdateDialog(self._get_update_manager(), self)
+            self._update_dialog.install_requested.connect(self._install_downloaded_update)
+        self._update_dialog.exec()
+
+    def _install_downloaded_update(self):
+        try:
+            from core.updates import verify_installer, version_tuple
+            from core.version import APP_VERSION
+            from core.installation import backup_profile
+            import subprocess
+            manager = self._get_update_manager()
+            if not manager.release or not manager.installer_path or version_tuple(manager.release.version) <= version_tuple(APP_VERSION):
+                raise ValueError("Download a newer verified release first.")
+            if not getattr(sys, "frozen", False):
+                raise ValueError("Run the Windows installer manually when using the source edition.")
+            verify_installer(manager.installer_path, manager.release)
+            if not self.save_session_state():
+                raise ValueError("Your layout could not be saved. The update has not started.")
+            backup_profile(self.device_manager.config_file)
+            env = os.environ.copy(); env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+            subprocess.Popen([manager.installer_path, "--install-dir", os.path.dirname(os.path.abspath(sys.executable)),
+                              "--wait-for-pid", str(os.getpid())], env=env)
+            self._allow_force_quit = True
+            self.close()
+        except Exception as error:
+            QMessageBox.warning(self, "Update not installed", str(error))
 
     def _check_startup_performance_mode(self):
         if not self.isVisible():
@@ -3322,7 +3403,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"[MainWindow] Error handling video ready signal: {e}")
 
-    def check_old_alerts_retention(self, silent_if_none: bool = True):
+    def check_old_alerts_retention(self, silent_if_none: bool = True, skip_snapshot_prune: bool = False):
         """
         Storage Retention Monitor:
         Detects alerts older than the configured retention period (default 30 days) and calculates storage footprint.
@@ -3331,7 +3412,7 @@ class MainWindow(QMainWindow):
         """
         retention_days = int(self.app_settings.get("retention_days", 7))
         # Background check also prunes unindexed / orphaned snapshots older than 3 days to keep disk size lean
-        if silent_if_none and hasattr(self.alert_manager, "prune_orphaned_snapshots"):
+        if silent_if_none and not skip_snapshot_prune and hasattr(self.alert_manager, "prune_orphaned_snapshots"):
             try:
                 self.alert_manager.prune_orphaned_snapshots(max_age_days=3, max_count=1000)
             except Exception as e:
@@ -4339,6 +4420,7 @@ class MainWindow(QMainWindow):
             dlg.sidebar.setCurrentRow(4)  # Individual Camera Settings tab
             dlg.stack.setCurrentIndex(4)
         dlg.settings_saved.connect(self._on_settings_saved)
+        dlg.check_updates_requested.connect(self.open_update_dialog)
         dlg.camera_connection_updated.connect(self.apply_camera_connection_update)
         dlg.exec()
 
@@ -4353,6 +4435,7 @@ class MainWindow(QMainWindow):
         # 2. Update and save global app settings immediately to guarantee persistence
         layout_req = new_settings.get("default_layout")
         self.app_settings.update(new_settings)
+        self._configure_update_schedule()
         self.device_manager.config["app_settings"] = self.app_settings
         self.device_manager.save_config()
 
@@ -4958,6 +5041,11 @@ class MainWindow(QMainWindow):
     def _execute_full_quit(self, event):
         """Safely stops all worker threads, flushes pending recordings and configs, and quits the application."""
         self._closing = True
+        if hasattr(self, "update_manager"):
+            self.update_manager.shutdown()
+        if hasattr(self, "_update_check_timer"):
+            self._update_check_timer.stop()
+        self._maintenance_timer.stop()
         if hasattr(self, "_telemetry_executor"):
             self._telemetry_executor.shutdown(wait=False, cancel_futures=True)
         self.sound_manager.stop()

@@ -132,11 +132,10 @@ def global_thread_excepthook(args):
     print(f"[FATAL TRAP PREVENTED - THREAD {th_name}]:\n{trace_str}", file=sys.stderr)
 
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QSplashScreen
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QIcon, QFont
+from PyQt6.QtGui import QIcon, QFont, QPixmap, QColor, QPainter
 
-from ui.main_window import MainWindow
 
 
 _INSTANCE_MUTEX = None
@@ -252,6 +251,18 @@ def main():
     font = QFont("Segoe UI", 10)
     app.setFont(font)
 
+    # Paint a lightweight, static loading view before importing/building the
+    # workstation. No animation or artificial two-second delay on the GUI thread.
+    pixmap = QPixmap(340, 130)
+    pixmap.fill(QColor("#0f172a"))
+    painter = QPainter(pixmap)
+    painter.setPen(QColor("#e2e8f0")); painter.setFont(QFont("Segoe UI", 13))
+    painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "Starting CCTVPanelView…")
+    painter.end()
+    splash = QSplashScreen(pixmap)
+    splash.show()
+    app.processEvents()
+
     # Check if first-run setup or requested via flags
     from core.device_manager import DeviceManager
     dm = DeviceManager()
@@ -264,6 +275,7 @@ def main():
     if force_setup or is_demo_setup or is_fresh_install:
         from PyQt6.QtWidgets import QDialog
         from ui.components.onboarding_wizard import OnboardingWizard
+        splash.hide()
         wiz = OnboardingWizard(is_demo=is_demo_setup)
         if app_icon:
             wiz.setWindowIcon(app_icon)
@@ -271,24 +283,16 @@ def main():
         if res != int(QDialog.DialogCode.Accepted) and (force_setup or is_demo_setup):
             sys.exit(0)
 
-    # Launch animated Cybernetic Aperture Genesis loading splash screen
-    from ui.components.splash_screen import CyberneticSplashScreen
-    splash = CyberneticSplashScreen(duration_sec=2.0)
     splash.show()
     app.processEvents()
-
-    # Instantiate master window in background while animation plays
+    from ui.main_window import MainWindow
     window = MainWindow()
     if app_icon:
         window.setWindowIcon(app_icon)
-
-    # Seamlessly transition to MainWindow when splash sequence completes (or skipped via click/Esc)
-    def on_splash_finished():
-        window.show()
-        window.raise_()
-        window.activateWindow()
-
-    splash.finished.connect(on_splash_finished)
+    window.show()
+    splash.finish(window)
+    window.raise_()
+    window.activateWindow()
 
     exit_code = app.exec()
     sys.exit(exit_code)

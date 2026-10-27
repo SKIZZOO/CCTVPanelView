@@ -13,6 +13,8 @@ import os
 import shutil
 import math
 import subprocess
+from core.version import APP_VERSION
+from core.installation import registered_install_dir, preserve_upgrade_profile, CONFIG_NAME
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
@@ -172,13 +174,14 @@ class InstallerDeploymentWorker(QThread):
     installation_finished = pyqtSignal(bool, str)
 
     def __init__(self, target_dir: str, create_desktop_shortcut: bool,
-                 create_start_menu: bool, set_high_dpi: bool, launch_wizard: bool):
+                 create_start_menu: bool, set_high_dpi: bool, launch_wizard: bool, previous_dir=None):
         super().__init__()
         self.target_dir = os.path.abspath(target_dir)
         self.create_desktop_shortcut = create_desktop_shortcut
         self.create_start_menu = create_start_menu
         self.set_high_dpi = set_high_dpi
         self.launch_wizard = launch_wizard
+        self.previous_dir = previous_dir
 
     def run(self):
         try:
@@ -189,18 +192,19 @@ class InstallerDeploymentWorker(QThread):
                 self.progress_updated.emit(percent, title, detail)
                 self.msleep(180)
 
-            for binary in ("CCTVPanelView.exe", "CCTVPanelView-Uninstall.exe"):
-                if not os.path.isfile(os.path.join(BASE_DIR, binary)):
-                    raise RuntimeError("Installer payload is incomplete: " + binary)
+            runtime_root = os.path.join(BASE_DIR, "payload", "CCTVPanelView")
+            if not os.path.isfile(os.path.join(runtime_root, "CCTVPanelView.exe")) or not os.path.isdir(os.path.join(runtime_root, "_internal")) or not os.path.isfile(os.path.join(BASE_DIR, "CCTVPanelView-Uninstall.exe")):
+                raise RuntimeError("Installer payload is incomplete.")
             import psutil
-            target_exe = os.path.normcase(os.path.join(self.target_dir, "CCTVPanelView.exe"))
+            target_exes = {os.path.normcase(os.path.join(folder, "CCTVPanelView.exe")) for folder in (self.target_dir, self.previous_dir) if folder}
             for proc in psutil.process_iter(["exe"]):
-                if os.path.normcase(proc.info.get("exe") or "") == target_exe:
+                if os.path.normcase(proc.info.get("exe") or "") in target_exes:
                     raise RuntimeError("Close CCTVPanelView before installing this update so recordings can finish safely.")
 
             # Step 1: Directory Setup
             advance(5, "Initializing installation environment...", f"[INIT] Validating application path: {self.target_dir}")
             os.makedirs(self.target_dir, exist_ok=True)
+            preserve_upgrade_profile(self.target_dir, self.previous_dir)
             os.makedirs(os.path.join(self.target_dir, "logs"), exist_ok=True)
             os.makedirs(os.path.join(self.target_dir, "snapshots"), exist_ok=True)
             os.makedirs(os.path.join(self.target_dir, "recordings"), exist_ok=True)
@@ -215,15 +219,16 @@ class InstallerDeploymentWorker(QThread):
 
             # Step 3: Copy AI Weights & Core Binaries
             advance(55, "Deploying CCTVPanelView workstation binaries...", "[BIN] Deploying CCTVPanelView core binary & AI engines...")
+            shutil.copytree(os.path.join(runtime_root, "_internal"), os.path.join(self.target_dir, "_internal"), dirs_exist_ok=True)
             for f in ["CCTVPanelView.exe", "CCTVPanelView-Uninstall.exe"]:
-                src = os.path.join(BASE_DIR, f)
+                src = os.path.join(runtime_root if f == "CCTVPanelView.exe" else BASE_DIR, f)
                 dst = os.path.join(self.target_dir, f)
                 if os.path.exists(src) and os.path.abspath(src) != os.path.abspath(dst):
                     shutil.copy2(src, dst)
             advance(70, "Finalizing neural weights deployment...", "[AI] On-device AI object detection models verified.")
 
             # Step 4: Configuration - Fresh Virgin Configuration Template (0 cameras)
-            advance(78, "Generating fresh workstation configuration...", "[CONFIG] Initializing clean installation profile...")
+            advance(78, "Preserving workstation configuration...", "[CONFIG] Keeping existing cameras, layouts and settings; creating defaults only for a fresh install.")
             import json
             cfg_dst = os.path.join(self.target_dir, "cameras_config.json")
             clean_fresh_config = {
@@ -255,13 +260,8 @@ class InstallerDeploymentWorker(QThread):
                     "telegram_enabled": False,
                     "discord_enabled": False,
                     "close_action": "ask",
-                    "performance_profile": "balanced",
-                    "session_slot_assignments": {
-                        "0": "",
-                        "1": "",
-                        "2": "",
-                        "3": ""
-                    }
+                    "performance_profile": "balanced"
+
                 },
                 "cameras": []
             }
@@ -370,7 +370,7 @@ class InstallerDeploymentWorker(QThread):
                 reg_path = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\CCTVPanelView"
                 with winreg.CreateKey(winreg.HKEY_CURRENT_USER, reg_path) as k:
                     winreg.SetValueEx(k, "DisplayName", 0, winreg.REG_SZ, "CCTVPanelView AI Surveillance Workstation")
-                    winreg.SetValueEx(k, "DisplayVersion", 0, winreg.REG_SZ, "2.2.2")
+                    winreg.SetValueEx(k, "DisplayVersion", 0, winreg.REG_SZ, APP_VERSION)
                     winreg.SetValueEx(k, "Publisher", 0, winreg.REG_SZ, "CCTVPanelView Workstation")
                     winreg.SetValueEx(k, "InstallLocation", 0, winreg.REG_SZ, self.target_dir)
                     uninst_exe = os.path.join(self.target_dir, "CCTVPanelView-Uninstall.exe")
@@ -397,9 +397,11 @@ class CCTVPanelViewInstaller(QMainWindow):
     Main Installer Application Window for CCTVPanelView.
     Obsidian Glass theme, custom title bar, animated installation progress.
     """
-    def __init__(self, dry_run: bool = False):
+    def __init__(self, dry_run: bool = False, install_dir=None):
         super().__init__()
         self.dry_run = dry_run
+        self.previous_install_dir = registered_install_dir()
+        self.initial_install_dir = install_dir or self.previous_install_dir
         self.drag_position = QPoint()
 
         self.setWindowTitle("CCTVPanelView Workstation Setup")
@@ -645,7 +647,7 @@ class CCTVPanelViewInstaller(QMainWindow):
         picker_row = QHBoxLayout()
         picker_row.setSpacing(8)
 
-        default_install_dir = os.path.join(os.environ.get("LOCALAPPDATA", "C:\\"), "Programs", APP_NAME)
+        default_install_dir = self.initial_install_dir or os.path.join(os.environ.get("LOCALAPPDATA", "C:\\"), "Programs", APP_NAME)
         self.txt_dest_path = QLineEdit(default_install_dir, dest_card)
         self.txt_dest_path.setFixedHeight(32)
         self.txt_dest_path.setStyleSheet("""
@@ -693,7 +695,7 @@ class CCTVPanelViewInstaller(QMainWindow):
         info_row.addWidget(self.lbl_disk_space)
         info_row.addStretch()
 
-        lbl_storage_hint = QLabel("Video & alert storage folders are configured in First-Run Setup", dest_card)
+        lbl_storage_hint = QLabel("Upgrades keep cameras, layouts and settings, with a configuration backup", dest_card)
         lbl_storage_hint.setStyleSheet("color: #475569; font-size: 10px; font-style: italic;")
         info_row.addWidget(lbl_storage_hint)
         d_layout.addLayout(info_row)
@@ -733,12 +735,13 @@ class CCTVPanelViewInstaller(QMainWindow):
         o_layout.addWidget(self.chk_start_menu)
 
         self.chk_open_wizard = QCheckBox("Launch First-Run Camera Setup Wizard immediately after installation", opts_card)
-        self.chk_open_wizard.setChecked(True)
+        self.chk_open_wizard.setChecked(False)
         self.chk_open_wizard.setStyleSheet("color: #94a3b8; font-size: 11px;")
         o_layout.addWidget(self.chk_open_wizard)
 
         layout.addWidget(opts_card)
         self._update_disk_space_info()
+        self._refresh_upgrade_options()
 
         layout.addStretch()
 
@@ -799,6 +802,17 @@ class CCTVPanelViewInstaller(QMainWindow):
 
     def _on_dest_path_changed(self):
         self._update_disk_space_info()
+        self._refresh_upgrade_options()
+
+    def _refresh_upgrade_options(self):
+        upgrading = os.path.isfile(os.path.join(self.txt_dest_path.text().strip(), CONFIG_NAME)) or bool(self.previous_install_dir and os.path.isfile(os.path.join(self.previous_install_dir, CONFIG_NAME)))
+        for name in ("chk_open_wizard", "chk_launch_wizard"):
+            if hasattr(self, name):
+                control = getattr(self, name)
+                if upgrading:
+                    control.setChecked(False)
+                control.setEnabled(not upgrading)
+                control.setToolTip("Upgrades preserve cameras, layout and settings automatically; configuration backups are saved in config-backups.")
 
     def _update_disk_space_info(self):
         path = self.txt_dest_path.text().strip()
@@ -807,9 +821,9 @@ class CCTVPanelViewInstaller(QMainWindow):
             drive_root = drive_letter + ":\\"
             total, used, free = shutil.disk_usage(drive_root)
             free_gb = free / (1024 ** 3)
-            self.lbl_disk_space.setText(f"Space Required: ~185 MB  •  Space Available on Drive {drive_letter}: {free_gb:.1f} GB")
+            self.lbl_disk_space.setText(f"Space Required: ~1 GB  •  Space Available on Drive {drive_letter}: {free_gb:.1f} GB")
         except Exception:
-            self.lbl_disk_space.setText("Space Required: ~185 MB")
+            self.lbl_disk_space.setText("Space Required: ~1 GB")
 
     # -------------------------------------------------------------
     # Screen 1: Animated Installation in Progress
@@ -986,7 +1000,7 @@ class CCTVPanelViewInstaller(QMainWindow):
         opts_box.addWidget(self.chk_launch_now)
 
         self.chk_launch_wizard = QCheckBox("Open First-Run Camera Setup Wizard", w)
-        self.chk_launch_wizard.setChecked(True)
+        self.chk_launch_wizard.setChecked(False)
         opts_box.addWidget(self.chk_launch_wizard)
 
         layout.addLayout(opts_box)
@@ -1035,7 +1049,8 @@ class CCTVPanelViewInstaller(QMainWindow):
             create_desktop_shortcut=self.chk_desktop.isChecked(),
             create_start_menu=self.chk_start_menu.isChecked(),
             set_high_dpi=True,
-            launch_wizard=self.chk_open_wizard.isChecked()
+            launch_wizard=self.chk_open_wizard.isChecked(),
+            previous_dir=self.previous_install_dir
         )
         self.worker.progress_updated.connect(self._on_progress_update)
         self.worker.installation_finished.connect(self._on_install_completed)
@@ -1053,6 +1068,7 @@ class CCTVPanelViewInstaller(QMainWindow):
 
     def _on_install_completed(self, success: bool, msg: str):
         if success:
+            self._refresh_upgrade_options()
             target = self.txt_dest_path.text().strip()
             self.lbl_sum_app.setText(f"<b>Application Location:</b> <span style='color:#38bdf8;'>{target}</span>")
             self.lbl_sum_alerts.setText(f"<b>Alerts & Storage Root:</b> <span style='color:#cbd5e1;'>{target}\\recordings</span> <span style='color:#64748b;'>(configured in First-Run Setup)</span>")
@@ -1066,7 +1082,7 @@ class CCTVPanelViewInstaller(QMainWindow):
     def _on_finish_clicked(self):
         target = self.txt_dest_path.text().strip()
         should_launch = self.chk_launch_now.isChecked()
-        should_run_wizard = hasattr(self, "chk_launch_wizard") and self.chk_launch_wizard.isChecked()
+        should_run_wizard = not os.path.isfile(os.path.join(target, CONFIG_NAME)) and hasattr(self, "chk_launch_wizard") and self.chk_launch_wizard.isChecked()
 
         if should_launch:
             main_exe = os.path.join(target, "CCTVPanelView.exe")
@@ -1091,8 +1107,8 @@ def main():
         result = {"passed": False}
         try:
             with tempfile.TemporaryDirectory(prefix="cctv-install-check-") as temp:
-                for name in ("CCTVPanelView.exe", "CCTVPanelView-Uninstall.exe"):
-                    shutil.copy2(os.path.join(BASE_DIR, name), os.path.join(temp, name))
+                shutil.copytree(os.path.join(BASE_DIR, "payload", "CCTVPanelView"), temp, dirs_exist_ok=True)
+                shutil.copy2(os.path.join(BASE_DIR, "CCTVPanelView-Uninstall.exe"), os.path.join(temp, "CCTVPanelView-Uninstall.exe"))
                 app_report = os.path.join(temp, "app-check.json")
                 env = os.environ.copy()
                 env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
@@ -1124,7 +1140,22 @@ def main():
     if os.path.exists(icon_path):
         app.setWindowIcon(QIcon(icon_path))
 
-    installer = CCTVPanelViewInstaller()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--install-dir")
+    parser.add_argument("--wait-for-pid", type=int)
+    options, _ = parser.parse_known_args()
+    if options.install_dir and not os.path.isabs(options.install_dir):
+        parser.error("Installation directory must be absolute")
+    if options.wait_for_pid:
+        import psutil, time
+        deadline = time.monotonic() + 60
+        while psutil.pid_exists(options.wait_for_pid) and time.monotonic() < deadline:
+            time.sleep(.2)
+        if psutil.pid_exists(options.wait_for_pid):
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(None, "Update waiting", "CCTVPanelView is still closing. Close it completely, then run the downloaded installer again.")
+    installer = CCTVPanelViewInstaller(install_dir=options.install_dir)
     installer.show()
     sys.exit(app.exec())
 

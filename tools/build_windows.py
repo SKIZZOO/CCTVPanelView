@@ -33,7 +33,7 @@ def main():
                         "--workpath", str(args.build_dir.resolve()), spec], cwd=root, env=env, check=True)
     report = args.dist_dir.resolve() / "packaged-self-test.json"
     env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
-    result = subprocess.run([str(args.dist_dir.resolve() / "CCTVPanelView.exe"), "--self-test", f"--self-test-report={report}"],
+    result = subprocess.run([str(args.dist_dir.resolve() / "CCTVPanelView" / "CCTVPanelView.exe"), "--self-test", f"--self-test-report={report}"],
                             cwd=args.dist_dir.resolve(), env=env, timeout=180)
     if result.returncode or not report.is_file():
         raise SystemExit("Packaged application self-test failed")

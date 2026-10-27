@@ -1499,55 +1499,8 @@ class OnboardingWizard(QDialog):
                 dm.config["app_settings"]["performance_profile"] = self.setup_data.get("performance_profile", "gamer")
                 dm.config["app_settings"]["has_completed_onboarding"] = True
 
-                # Guarantee complete stream objects with RTSP authentication for every camera
-                for c in self.setup_data.get("cameras", []):
-                    ip = c.get("ip", "127.0.0.1")
-                    port = c.get("port", 554)
-                    user = c.get("username") or "admin"
-                    c["username"] = user
-                    pwd = c.get("password", "")
-                    auth = f"{user}:{pwd}@" if user and pwd else ""
-                    is_dual = bool(c.get("is_dual_lens", False))
-                    c["is_dual_lens"] = is_dual
-                    cam_id = c.get("id", f"cam_{ip.replace('.', '_')}")
-                    p1 = c.get("lens1_path") or "/live/ch00_0"
-                    p2 = c.get("lens2_path") or "/live/ch01_0"
-
-                    def _rebuild_url(old_u: str, def_p: str) -> str:
-                        if old_u and old_u.startswith("rtsp://"):
-                            after = old_u[7:]
-                            idx = after.find("/")
-                            p = after[idx:] if idx != -1 else def_p
-                        else:
-                            p = def_p
-                        if not p.startswith("/"):
-                            p = f"/{p}"
-                        return f"rtsp://{auth}{ip}:{port}{p}"
-
-                    streams_list = c.get("streams", [])
-                    u1 = streams_list[0].get("url") if len(streams_list) > 0 else ""
-                    u2 = streams_list[1].get("url") if len(streams_list) > 1 else ""
-
-                    url1 = _rebuild_url(u1, p1)
-                    url2 = _rebuild_url(u2, p2)
-
-                    c["streams"] = [
-                        {
-                            "id": f"{cam_id}_lens1",
-                            "name": "Lens 1 (PTZ Zoom)" if is_dual else "Main Stream",
-                            "channel": 0,
-                            "url": url1,
-                            "is_ptz": True
-                        }
-                    ]
-                    if is_dual:
-                        c["streams"].append({
-                            "id": f"{cam_id}_lens2",
-                            "name": "Lens 2 (Fixed Wide)",
-                            "channel": 1,
-                            "url": url2,
-                            "is_ptz": False
-                        })
+                from core.onboarding_profiles import merge_setup_cameras
+                self.setup_data["cameras"] = merge_setup_cameras(self.setup_data.get("cameras", []), dm.get_cameras())
 
                 if self.setup_data["cameras"]:
                     dm.config["cameras"] = self.setup_data["cameras"]
