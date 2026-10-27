@@ -40,6 +40,11 @@ class NotificationPolicyTests(unittest.TestCase):
         self.assertIsNone(notification_category({"label": "person and car"}))
 
     def test_each_category_and_explicit_empty_selection(self):
+        from core.ai_detector import PERSON_CLASSES, VEHICLE_CLASSES, ANIMAL_CLASSES
+        for category, classes in (("person", PERSON_CLASSES), ("vehicle", VEHICLE_CLASSES), ("animal", ANIMAL_CLASSES)):
+            dispatcher = self.make_dispatcher(outgoing_notification_categories=[category])
+            for label in classes:
+                self.assertTrue(dispatcher.should_notify_label(label), label)
         labels = {"person": "PERSON", "vehicle": "TRUCK", "animal": "CHICKEN", "motion": "MIȘCARE"}
         for category in labels:
             dispatcher = self.make_dispatcher(outgoing_notification_categories=[category])

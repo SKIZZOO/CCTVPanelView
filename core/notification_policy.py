@@ -6,7 +6,7 @@ CATEGORY_LABELS = {"person": "People", "vehicle": "Cars / vehicles", "animal": "
 _ALIASES = {
     "person": {"person", "persons", "people", "human", "intruder", "om", "persoana", "persoane"},
     "vehicle": {"vehicle", "vehicles", "car", "truck", "bus", "motorcycle", "bicycle", "van", "masina", "auto", "vehicul"},
-    "animal": {"animal", "animals", "dog", "cat", "bird", "chicken", "horse", "sheep", "cow", "bear", "elephant", "wildlife", "caine", "pisica", "gaina", "pasare"},
+    "animal": {"animal", "animals", "dog", "cat", "bird", "chicken", "horse", "sheep", "cow", "bear", "elephant", "zebra", "giraffe", "wildlife", "caine", "pisica", "gaina", "pasare"},
     "motion": {"motion", "miscare"},
 }
 
