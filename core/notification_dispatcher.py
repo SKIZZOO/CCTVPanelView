@@ -19,6 +19,7 @@ import urllib.error
 import threading
 from typing import Dict, Any, Optional, Tuple, List
 from datetime import datetime
+from core.notification_policy import allows_notification
 
 
 def get_local_lan_ip() -> str:
@@ -132,7 +133,7 @@ def resolve_gdrive_url(filename: Optional[str] = None, fallback_folder: str = "a
 class NotificationDispatcher:
     """
     Manages non-blocking asynchronous mobile notifications to user's phone.
-    Guarantees zero stall on RTSP video feeds or PyQt GUI event loops.
+    Performs delivery outside RTSP capture and PyQt GUI event loops.
     """
 
     def __init__(self, settings: Optional[Dict[str, Any]] = None):
@@ -147,7 +148,7 @@ class NotificationDispatcher:
 
     @property
     def is_phone_enabled(self) -> bool:
-        return bool(self.settings.get("phone_notifications_enabled", True))
+        return bool(self.settings.get("phone_notifications_enabled", False)) and bool(self.settings.get("master_alerts_enabled", True))
 
     @property
     def notify_video_enabled(self) -> bool:
@@ -155,14 +156,11 @@ class NotificationDispatcher:
 
     @property
     def ntfy_enabled(self) -> bool:
-        return bool(self.settings.get("ntfy_enabled", True))
+        return bool(self.settings.get("ntfy_enabled", False))
 
     @property
     def ntfy_topic(self) -> str:
-        topic = self.settings.get("ntfy_topic", "").strip()
-        if not topic:
-            topic = "cctv_pv_alerts"
-        return topic
+        return self.settings.get("ntfy_topic", "").strip()
 
     @property
     def ntfy_server(self) -> str:
@@ -175,7 +173,7 @@ class NotificationDispatcher:
 
     @property
     def telegram_token(self) -> str:
-        return self.settings.get("telegram_bot_token", "").strip()
+        return self.settings.get("telegram_token", self.settings.get("telegram_bot_token", "")).strip()
 
     @property
     def telegram_chat_id(self) -> str:
@@ -198,36 +196,10 @@ class NotificationDispatcher:
         Strict user notification filter for mobile push (ntfy / Telegram / Discord).
         Ensures users receive ONLY the categories they explicitly chose.
         """
-        text = str(label or "").upper()
-        if alert_entry:
-            what = str(alert_entry.get("what_found", "")).upper()
-            desc = str(alert_entry.get("description", "")).upper()
-            reason = str(alert_entry.get("trigger_reason", "")).upper()
-            text = f"{text} {what} {desc} {reason}"
-
-        # 1. PERSON / INTRUDER (OM, PERSOANA)
-        if any(w in text for w in ["PERSON", "HUMAN", "INTRUDER", "OM", "PERSOAN"]):
-            return bool(self.settings.get("notify_person", True))
-
-        # 2. ANIMAL / POULTRY (CHICKEN, BIRD, DOG, CAT, etc.)
-        if any(w in text for w in [
-            "ANIMAL", "DOG", "CAT", "BIRD", "CHICKEN", "HORSE", "SHEEP", "COW",
-            "BEAR", "WILDLIFE", "CAINE", "PISICA", "GAINA", "PASARE"
-        ]):
-            return bool(self.settings.get("notify_animal", False))
-
-        # 3. VEHICLE (CAR, TRUCK, BUS, MOTORCYCLE, VEHICLE, MASINA, etc.)
-        if any(w in text for w in [
-            "VEHICLE", "CAR", "TRUCK", "BUS", "MOTORCYCLE", "BICYCLE", "MASINA", "AUTO", "VEHICUL"
-        ]):
-            return bool(self.settings.get("notify_vehicle", False))
-
-        # 4. MOTION (MOTION, MISCARE, MIȘCARE)
-        if any(w in text for w in ["MOTION", "MISCARE", "MIȘCARE"]):
-            return bool(self.settings.get("notify_motion", False))
-
-        # 5. Default fallback for unknown types:
-        return bool(self.settings.get("notify_motion", False))
+        entry = dict(alert_entry or {})
+        entry["label"] = label
+        with self._lock:
+            return allows_notification(self.settings, entry)
 
     def send_alert(self, alert_entry: Dict[str, Any]):
         """Dispatches immediate snapshot alert to phone in a background daemon thread."""
@@ -277,6 +249,10 @@ class NotificationDispatcher:
 
     def _dispatch_worker(self, alert_entry: Dict[str, Any]):
         """Runs on background thread; executes HTTP requests with short timeouts."""
+        # Recheck after queueing: disarming or changing categories also applies
+        # to work that has not started delivery yet.
+        if not self.is_phone_enabled or not self.should_notify_label(alert_entry.get("label", ""), alert_entry):
+            return
         cam_name = alert_entry.get("camera_name", "Camera")
         label = alert_entry.get("label", "ALARM")
         conf = alert_entry.get("confidence", 0.0)
@@ -318,6 +294,12 @@ class NotificationDispatcher:
 
     def _dispatch_video_worker(self, alert_entry: Dict[str, Any]):
         """Runs on background thread; uploads recorded MP4 clip to phone services."""
+        if not self.notify_video_enabled:
+            return
+        # Recheck after queueing: disarming or changing categories also applies
+        # to work that has not started delivery yet.
+        if not self.is_phone_enabled or not self.should_notify_label(alert_entry.get("label", ""), alert_entry):
+            return
         cam_name = alert_entry.get("camera_name", "Camera")
         label = alert_entry.get("label", "ALARM")
         conf = alert_entry.get("confidence", 0.0)

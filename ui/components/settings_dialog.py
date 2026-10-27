@@ -907,6 +907,10 @@ class SettingsDialog(QDialog):
         self._build_tab_night()          # Index 7
         self._build_tab_wind()           # Index 8
 
+        # Incident creation and outgoing delivery are different choices.
+        detection_layout = self.stack.widget(2).widget().layout()
+        detection_layout.insertWidget(0, self.incident_category_card)
+
         # Keep related controls on the same page, preserving the first six page
         # indexes used by existing shortcuts and deep links.
         for source_index, destination in ((6, 1), (7, 4), (8, 2)):
@@ -1094,10 +1098,11 @@ class SettingsDialog(QDialog):
         card_master.add_row(SettingRow("Enable Mobile Push Alerts", "Broadcast instant photos, detections, and 10s video clips to your smartphone", self.sw_phone_enabled))
         layout.addWidget(card_master)
 
-        card_filter = SettingCard("Mobile Notification Filters", "Select ONLY categories for which you wish to receive mobile alerts")
+        card_filter = SettingCard("Create incident alerts", "Choose categories that create local incidents, alarm clips and desktop alerts")
+        self.incident_category_card = card_filter
 
         self.sw_notify_person = ToggleSwitch(checked=self.settings.get("notify_person", False), active_color="#0284c7")
-        card_filter.add_row(SettingRow("Persons (Recommended)", "Send alert when a person is detected", self.sw_notify_person))
+        card_filter.add_row(SettingRow("People", "Create an incident when a person is detected", self.sw_notify_person))
 
         self.sw_notify_vehicle = ToggleSwitch(checked=self.settings.get("notify_vehicle", False))
         card_filter.add_row(SettingRow("Vehicles", "Cars, vans, motorcycles, or bicycles", self.sw_notify_vehicle))
@@ -1106,9 +1111,23 @@ class SettingsDialog(QDialog):
         card_filter.add_row(SettingRow("Animals & Pets", "Dogs, cats, birds, or farm animals", self.sw_notify_animal))
 
         self.sw_notify_motion = ToggleSwitch(checked=self.settings.get("notify_motion", False))
-        card_filter.add_row(SettingRow("General Motion", "Lighting changes, rustling foliage, or wind (produces high alert volume)", self.sw_notify_motion))
+        card_filter.add_row(SettingRow("General Motion", "Create incidents for confirmed motion without an identified object", self.sw_notify_motion))
 
         layout.addWidget(card_filter)
+
+        from core.notification_policy import CATEGORY_LABELS, notification_categories
+        outgoing = SettingCard("Send notifications for", "Applies to ntfy, Telegram and Discord photos and clips. Recording and the incident feed keep their own settings.")
+        selected = notification_categories(self.settings)
+        self.outgoing_category_switches = {}
+        for category, label in CATEGORY_LABELS.items():
+            switch = ToggleSwitch(checked=category in selected)
+            self.outgoing_category_switches[category] = switch
+            outgoing.add_row(SettingRow(label, "Send outgoing notifications for this detection category", switch))
+        self.btn_people_only = QPushButton("People only")
+        self.btn_people_only.setFixedHeight(32)
+        self.btn_people_only.clicked.connect(self._select_people_only_notifications)
+        outgoing.add_row(SettingRow("People-only preset", "Requires AI person detection and People incidents enabled under Detection. Does not enable a delivery service.", self.btn_people_only))
+        layout.addWidget(outgoing)
 
         card_mobile = SettingCard("Mobile Push Services (ntfy.sh & Telegram)", "Free instant push notifications with captured snapshots and AI visual descriptions")
 
@@ -1133,7 +1152,7 @@ class SettingsDialog(QDialog):
         tf_layout.addWidget(btn_gen_topic)
         card_mobile.add_row(SettingRow("ntfy Topic (Secret Channel)", "Topic name subscribed in your ntfy mobile app", topic_frame))
 
-        self.sw_send_video = ToggleSwitch(checked=self.settings.get("send_video_to_phone", False))
+        self.sw_send_video = ToggleSwitch(checked=self.settings.get("phone_notify_video", self.settings.get("send_video_to_phone", False)))
         card_mobile.add_row(SettingRow("Send Video Clip to Phone", "Include recorded MP4 clip (pre + post alarm)", self.sw_send_video))
 
         self.sw_telegram_enabled = ToggleSwitch(checked=self.settings.get("telegram_enabled", False))
@@ -1143,7 +1162,8 @@ class SettingsDialog(QDialog):
         self.txt_tg_token.setFixedWidth(220)
         self.txt_tg_token.setFixedHeight(32)
         self.txt_tg_token.setPlaceholderText("123456:ABC-DEF...")
-        self.txt_tg_token.setText(self.settings.get("telegram_token", ""))
+        self.txt_tg_token.setEchoMode(QLineEdit.EchoMode.Password)
+        self.txt_tg_token.setText(self.settings.get("telegram_token", self.settings.get("telegram_bot_token", "")))
         card_mobile.add_row(SettingRow("Telegram Bot Token", "Bot token obtained from @BotFather", self.txt_tg_token))
 
         self.txt_tg_chat = QLineEdit()
@@ -1184,19 +1204,11 @@ class SettingsDialog(QDialog):
         self.txt_ntfy_topic.setText(secret)
 
     def _on_master_alerts_toggled(self, armed: bool):
-        """Auto-syncs alert filters and desktop toasts when master security is toggled."""
-        if hasattr(self, "sw_notify_person"):
-            self.sw_notify_person.setChecked(armed)
-        if hasattr(self, "sw_notify_vehicle"):
-            self.sw_notify_vehicle.setChecked(armed)
-        if hasattr(self, "sw_notify_animal"):
-            self.sw_notify_animal.setChecked(armed)
-        if hasattr(self, "sw_notify_motion"):
-            self.sw_notify_motion.setChecked(armed)
-        if hasattr(self, "sw_desktop_toasts"):
-            self.sw_desktop_toasts.setChecked(armed)
-        if hasattr(self, "sw_ai_enabled") and armed:
-            self.sw_ai_enabled.setChecked(True)
+        """Arming pauses/resumes delivery without rewriting category preferences."""
+
+    def _select_people_only_notifications(self):
+        for category, switch in self.outgoing_category_switches.items():
+            switch.setChecked(category == "person")
 
     def _apply_recommended_alert_settings(self):
         """One-click proven security configuration for maximum protection with zero false alarm spam."""
@@ -2332,6 +2344,7 @@ class SettingsDialog(QDialog):
             # Notifications & Security
             "master_alerts_enabled": self.sw_master_alerts.isChecked() if hasattr(self, "sw_master_alerts") else True,
             "phone_notifications_enabled": self.sw_phone_enabled.isChecked() if hasattr(self, "sw_phone_enabled") else False,
+            "outgoing_notification_categories": [category for category, switch in self.outgoing_category_switches.items() if switch.isChecked()],
             "notify_person": self.sw_notify_person.isChecked() if hasattr(self, "sw_notify_person") else False,
             "notify_vehicle": self.sw_notify_vehicle.isChecked() if hasattr(self, "sw_notify_vehicle") else False,
             "notify_animal": self.sw_notify_animal.isChecked() if hasattr(self, "sw_notify_animal") else False,
@@ -2439,6 +2452,7 @@ class SettingsDialog(QDialog):
 
             "master_alerts_enabled": self.sw_master_alerts.isChecked() if hasattr(self, "sw_master_alerts") else True,
             "phone_notifications_enabled": self.sw_phone_enabled.isChecked() if hasattr(self, "sw_phone_enabled") else False,
+            "outgoing_notification_categories": [category for category, switch in self.outgoing_category_switches.items() if switch.isChecked()],
             "notify_person": self.sw_notify_person.isChecked() if hasattr(self, "sw_notify_person") else False,
             "notify_vehicle": self.sw_notify_vehicle.isChecked() if hasattr(self, "sw_notify_vehicle") else False,
             "notify_animal": self.sw_notify_animal.isChecked() if hasattr(self, "sw_notify_animal") else False,
