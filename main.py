@@ -195,6 +195,9 @@ def main():
     if "--self-test" in sys.argv:
         from core.diagnostics import run_self_test
         raise SystemExit(run_self_test(sys.argv))
+    if "--update-check" in sys.argv:
+        from core.diagnostics import run_update_check
+        raise SystemExit(run_update_check(sys.argv))
     # Install global exception hooks
     sys.excepthook = global_excepthook
     if hasattr(threading, "excepthook"):

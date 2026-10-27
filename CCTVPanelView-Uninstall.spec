@@ -1,10 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
+import ssl
+from pathlib import Path
+runtime_ca = Path(ssl.__file__).with_name('codex-rejected-cas.pem')
+tls_data = [(str(runtime_ca), '.')] if runtime_ca.is_file() else []
 
 a = Analysis(
     ['uninstaller.py'],
     pathex=[],
     binaries=[],
-    datas=[('assets', 'assets')],
+    datas=[('assets', 'assets')] + tls_data,
     hiddenimports=['winreg'],
     hookspath=[],
     hooksconfig={},

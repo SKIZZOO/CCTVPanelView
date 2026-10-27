@@ -1418,11 +1418,12 @@ class PhoneAccessDialog(QDialog):
     def _test_ntfy_push(self):
         from core.notification_dispatcher import NotificationDispatcher
         settings = getattr(self.main_window, "app_settings", {})
-        topic = settings.get("ntfy_topic", "cctv_pv_alerts")
+        topic = settings.get("ntfy_topic", "").strip()
         dispatcher = NotificationDispatcher({
             "phone_notifications_enabled": True,
             "ntfy_enabled": True,
-            "ntfy_topic": topic
+            "ntfy_topic": topic,
+            "ntfy_server": settings.get("ntfy_server", "")
         })
         ok, msg = dispatcher.send_test_notification("ntfy")
         if ok:

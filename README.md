@@ -8,7 +8,7 @@
 
 A desktop viewer for RTSP/ONVIF IP cameras, with motion alerts, optional on-device object detection, local recording, and a browser interface for phones and tablets.
 
-[**Download for Windows**](https://github.com/SKIZZOO/CCTVPanelView/releases/latest) · [Features](#what-you-can-do) · [Quick start](#install-the-windows-release) · [Security](#security-and-privacy) · [2.3.0 upgrades and updates](docs/RELEASE-2.3.0.md)
+[**Download for Windows**](https://github.com/SKIZZOO/CCTVPanelView/releases/latest) · [Features](#what-you-can-do) · [Quick start](#install-the-windows-release) · [Security](#security-and-privacy) · [2.3.1 ntfy delivery fix](docs/RELEASE-2.3.1.md)
 
 ![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4)
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776ab)
@@ -50,6 +50,12 @@ Settings is grouped into **General & Layout**, **Alerts & Sounds**, **Detection*
 In the incident feed, choose **Motion**, **Person**, **Animal**, or **Car / vehicle** to filter existing and incoming alerts. The choices persist across restarts. Display filters do not stop detection, recording, or separately configured notifications.
 
 To send **only people notifications**, open **Settings → Alerts & Sounds → Send notifications for** and click **People only**. Enable Mobile Push Alerts and configure your chosen service. The category switches apply to both photos and clips sent through ntfy, Telegram, and Discord. Turning every category off sends none. Choices survive saving, restarting, and disarming/rearming.
+
+Under the ntfy topic, **Send text-only test** checks the currently entered topic without sending camera data. The result appears in Settings. Snapshot and video attachments are uploaded directly to ntfy; Google Drive synchronization is not required. If the server rejects an attachment as too large, the app sends a text alert instead. Server acceptance is checked using ntfy's message acknowledgement; HTTP errors and invalid proxy responses are reported as failures.
+
+The Windows package includes certifi's public CA bundle so HTTPS delivery does not fail when default Windows trust loading is unavailable. Certificate and hostname verification stay enabled. This also applies to updater HTTPS; explicit `SSL_CERT_FILE` / `SSL_CERT_DIR` settings are respected.
+
+<img src="docs/screenshots/settings_ntfy_test.png" width="1100" alt="ntfy topic settings and a background text-only delivery test">
 
 **Detection → Create incident alerts** controls which local incidents are created. Keep AI person detection and People incidents enabled to receive person notifications. These controls are independent of outgoing notification categories and the sidebar's display filters.
 
@@ -95,7 +101,7 @@ Process isolation uses additional memory per active stream. Cameras still share 
 ## Install the Windows release
 
 1. Open [the latest release](https://github.com/SKIZZOO/CCTVPanelView/releases/latest).
-2. Download **CCTVPanelView-2.3.0-Setup.exe** and run it.
+2. Download **CCTVPanelView-2.3.1-Setup.exe** and run it.
 3. Choose an installation folder and shortcuts, then launch the app from the Desktop or Start Menu.
 
 The installer bundles Python, Qt, AI models, and FFmpeg/FFplay/FFprobe. Normal use needs no Python setup or batch files. Updates preserve existing camera configuration. Close the running app before an update so recordings can finish. A graphical uninstaller is available through Windows Installed Apps.

@@ -1,14 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
+import ssl
 from pathlib import Path
 ffmpeg_dir = Path(os.environ['CCTVPANELVIEW_FFMPEG_DIR'])
+runtime_ca = Path(ssl.__file__).with_name('codex-rejected-cas.pem')
+# Preserve certificate policy data required by the build's Python distribution.
+tls_data = [(str(runtime_ca), '.')] if runtime_ca.is_file() else []
 
 
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[(str(ffmpeg_dir / name), '.') for name in ('ffmpeg.exe', 'ffplay.exe', 'ffprobe.exe')],
-    datas=[('assets', 'assets'), ('sounds', 'sounds'), ('mobilenet.caffemodel', '.'), ('deploy.prototxt', '.'), ('yolov5n.onnx', '.')],
+    datas=[('assets', 'assets'), ('sounds', 'sounds'), ('mobilenet.caffemodel', '.'), ('deploy.prototxt', '.'), ('yolov5n.onnx', '.')] + tls_data,
     hiddenimports=['cctv_server', 'core.diagnostics', 'qrcode.image.pil'],
     hookspath=[],
     hooksconfig={},

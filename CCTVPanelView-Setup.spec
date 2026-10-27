@@ -1,14 +1,17 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
+import ssl
 from pathlib import Path
 dist_dir = Path(os.environ['CCTVPANELVIEW_DIST_DIR'])
+runtime_ca = Path(ssl.__file__).with_name('codex-rejected-cas.pem')
+tls_data = [(str(runtime_ca), '.')] if runtime_ca.is_file() else []
 
 
 a = Analysis(
     ['installer.py'],
     pathex=[],
     binaries=[],
-    datas=[('assets', 'assets'), (str(dist_dir / 'CCTVPanelView'), 'payload/CCTVPanelView'), (str(dist_dir / 'CCTVPanelView-Uninstall.exe'), '.')],
+    datas=[('assets', 'assets'), (str(dist_dir / 'CCTVPanelView'), 'payload/CCTVPanelView'), (str(dist_dir / 'CCTVPanelView-Uninstall.exe'), '.')] + tls_data,
     hiddenimports=['winreg'],
     hookspath=[],
     hooksconfig={},

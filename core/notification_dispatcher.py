@@ -20,6 +20,7 @@ import threading
 from typing import Dict, Any, Optional, Tuple, List
 from datetime import datetime
 from core.notification_policy import allows_notification
+from core.network_tls import verified_tls_context
 
 
 def get_local_lan_ip() -> str:
@@ -77,57 +78,6 @@ def to_header_safe(text: str) -> str:
     translit = text.translate(table)
     return translit.encode("ascii", "ignore").decode("ascii")
 
-
-def resolve_gdrive_file_id(filename: Optional[str] = None, max_retries: int = 2) -> Optional[str]:
-    """Resolves the direct Google Drive cloud_id for a given file name."""
-    if not filename:
-        return None
-    base = os.path.basename(filename)
-    import glob
-    import sqlite3
-
-    for attempt in range(max_retries + 1):
-        account_dirs = glob.glob(os.path.expandvars(r"%LOCALAPPDATA%\Google\DriveFS\*"))
-        for adir in account_dirs:
-            db_path = os.path.join(adir, "mirror_metadata_sqlite.db")
-            if not os.path.exists(db_path):
-                continue
-            try:
-                con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-                cur = con.cursor()
-                row = cur.execute("""
-                    SELECT s.cloud_id
-                    FROM stable_ids s
-                    JOIN item_properties p ON s.stable_id = p.item_stable_id
-                    WHERE p.key='local-title' AND p.value = ?
-                """, (base,)).fetchone()
-                con.close()
-                if row and row[0]:
-                    return str(row[0])
-            except Exception:
-                pass
-        if attempt < max_retries:
-            time.sleep(0.6)
-    return None
-
-
-def resolve_gdrive_url(filename: Optional[str] = None, fallback_folder: str = "alarms") -> str:
-    """
-    Resolves the direct Google Drive cloud URL for a given file or folder.
-    First checks mirror_metadata_sqlite.db for the file's cloud_id.
-    If not yet synced, returns direct search query URL for that exact file name.
-    """
-    gdrive_alarms_id = "1xBSjjmOZXHTu19gfDbB2Y6H2Lns9sqXk"     # alarms folder on Google Drive
-
-    if filename:
-        cloud_id = resolve_gdrive_file_id(filename, max_retries=1)
-        if cloud_id:
-            return f"https://drive.google.com/file/d/{cloud_id}/view"
-        base = os.path.basename(filename)
-        encoded_fn = urllib.parse.quote(base)
-        return f"https://drive.google.com/drive/u/0/search?q={encoded_fn}"
-
-    return f"https://drive.google.com/drive/folders/{gdrive_alarms_id}"
 
 
 class NotificationDispatcher:
@@ -276,7 +226,7 @@ class NotificationDispatcher:
                 snap_fn = os.path.basename(snap_path) if snap_path else ""
                 self._send_ntfy(cam_name, label, conf, desc, time_str, trigger_reason, snap_bytes, snap_filename=snap_fn)
             except Exception as e:
-                print(f"[Notifier] ntfy push error: {e}")
+                print("[Notifier] ntfy push error: " + self.ntfy_error_message(e))
 
         # 2. Telegram Bot
         if self.telegram_enabled and self.telegram_token and self.telegram_chat_id:
@@ -332,7 +282,7 @@ class NotificationDispatcher:
             try:
                 self._send_ntfy_video(cam_name, label, conf, desc, time_str, video_bytes, filename)
             except Exception as e:
-                print(f"[Notifier] ntfy video push error: {e}")
+                print("[Notifier] ntfy video push error: " + self.ntfy_error_message(e))
 
         # 2. Telegram Bot sendVideo
         if self.telegram_enabled and self.telegram_token and self.telegram_chat_id:
@@ -348,71 +298,68 @@ class NotificationDispatcher:
             except Exception as e:
                 print(f"[Notifier] Discord video send error: {e}")
 
-    def _send_ntfy(
-        self,
-        cam_name: str,
-        label: str,
-        conf: float,
-        desc: str,
-        time_str: str,
-        trigger_reason: str,
-        snap_bytes: Optional[bytes],
-        snap_filename: str = ""
-    ):
-        """Sends rich push notification via ntfy.sh."""
+    @staticmethod
+    def ntfy_error_message(error):
+        if isinstance(error, urllib.error.HTTPError):
+            hints = {401: "Check server authentication.", 403: "This topic is not writable with the current credentials.",
+                     413: "Attachment upload limit exceeded.", 429: "Server rate limit or daily quota reached; wait before retrying."}
+            return f"HTTP {error.code}. " + hints.get(error.code, "The ntfy server rejected the request.")
+        if isinstance(error, FileNotFoundError):
+            return "Local delivery dependency missing (FileNotFoundError). Reinstall the current update and retry the text test."
+        if isinstance(error, urllib.error.URLError):
+            return "Network or TLS connection failed. Check your ntfy server address and connection."
+        if isinstance(error, ValueError):
+            return str(error)
+        return type(error).__name__ + ": notification delivery failed."
+
+    @staticmethod
+    def _ntfy_header(value, fallback="Camera alert"):
+        # Header values are ASCII and single-line; bodies retain UTF-8 text.
+        value = to_header_safe(str(value)).replace("\r", " ").replace("\n", " ").strip()
+        return value[:512] or fallback
+
+    def _publish_ntfy(self, title, message, tags, attachment=None, filename=None, timeout=10, priority="high"):
+        from urllib.parse import quote
         topic = self.ntfy_topic
-        server = self.ntfy_server
-        url = f"{server}/{topic}"
-
-        conf_str = f" ({int(conf * 100)}%)" if conf > 0 else ""
-        clean_cam = cam_name.split(" (")[0].strip()
-        title = f"[ALERT] {clean_cam}: {label.title()}{conf_str}"
-
-        # Clean ASCII-safe title & message for HTTP headers
-        safe_title = to_header_safe(title) or title
-        message = desc or f"{label.title()} detected at {time_str}"
-        safe_message = to_header_safe(message) or message
-
-        port = self.settings.get("web_port", 8080)
-        web_url = f"http://{self.lan_ip}:{port}/"
-        gdrive_url = resolve_gdrive_url(snap_filename, "alarms")
-
-        headers = {
-            "Title": safe_title,
-            "Priority": "urgent" if "PERSON" in label.upper() else "high",
-            "Tags": "warning,camera",
-            "Click": gdrive_url,
-            "Actions": f"view, Open in Google Drive, {gdrive_url}; view, Live Camera, {web_url}"
-        }
-
-        if snap_bytes:
-            headers["Filename"] = "snapshot.jpg"
-            headers["Message"] = safe_message
-            req = urllib.request.Request(url, data=snap_bytes, headers=headers, method="PUT")
-            try:
-                with urllib.request.urlopen(req, timeout=8) as resp:
-                    pass
-                return
-            except urllib.error.HTTPError as he:
-                if he.code == 413:
-                    # Daily quota or file size limit exceeded on ntfy: fallback to text push
-                    fallback_headers = {
-                        "Title": safe_title,
-                        "Priority": headers.get("Priority", "high"),
-                        "Tags": headers.get("Tags", "warning"),
-                        "Click": gdrive_url,
-                        "Actions": f"view, Open in Google Drive, {gdrive_url}; view, Live Camera, {web_url}"
-                    }
-                    req_fb = urllib.request.Request(url, data=safe_message.encode("utf-8"), headers=fallback_headers, method="POST")
-                    with urllib.request.urlopen(req_fb, timeout=8) as resp:
-                        pass
-                    return
-                raise
+        if not topic:
+            raise ValueError("Set the ntfy topic subscribed on your phone.")
+        url = self.ntfy_server + "/" + quote(topic, safe="")
+        headers = {"Title": self._ntfy_header(title), "Priority": priority, "Tags": tags}
+        body = str(message).encode("utf-8")
+        method = "POST"
+        if attachment:
+            import re
+            clean_name = re.sub(r"[^A-Za-z0-9._-]", "_", str(filename or "attachment"))[-160:]
+            headers["Filename"] = clean_name or "attachment"
+            headers["Message"] = self._ntfy_header(message)
+            body = attachment
+            method = "PUT"
         else:
-            data = safe_message.encode("utf-8")
-            req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-            with urllib.request.urlopen(req, timeout=8) as resp:
-                pass
+            headers["Content-Type"] = "text/plain; charset=utf-8"
+        request = urllib.request.Request(url, data=body, headers=headers, method=method)
+        with urllib.request.urlopen(request, timeout=timeout, context=verified_tls_context()) as response:
+            raw = response.read(128 * 1024 + 1)
+        if len(raw) > 128 * 1024:
+            raise ValueError("ntfy returned an oversized delivery response.")
+        try:
+            accepted = json.loads(raw)
+        except (ValueError, UnicodeError):
+            raise ValueError("ntfy returned an invalid response instead of accepting the message.") from None
+        if not isinstance(accepted, dict) or accepted.get("event") != "message" or not accepted.get("id"):
+            raise ValueError("ntfy did not acknowledge a published message.")
+
+    def _send_ntfy(self, cam_name, label, conf, desc, time_str, trigger_reason, snap_bytes, snap_filename=""):
+        """Publish directly to ntfy; cloud-sync files are not a delivery dependency."""
+        conf_str = f" ({int(conf * 100)}%)" if conf > 0 else ""
+        title = f"[ALERT] {cam_name.split(' (')[0].strip()}: {label.title()}{conf_str}"
+        message = desc or f"{label.title()} detected at {time_str}"
+        priority = "urgent" if "PERSON" in label.upper() else "high"
+        try:
+            self._publish_ntfy(title, message, "warning,camera", snap_bytes, "snapshot.jpg", priority=priority)
+        except urllib.error.HTTPError as error:
+            if error.code != 413 or not snap_bytes:
+                raise
+            self._publish_ntfy(title, message + " (Snapshot attachment was too large for the server.)", "warning,camera", priority=priority)
 
     def _send_telegram(
         self,
@@ -460,7 +407,7 @@ class NotificationDispatcher:
             body = json.dumps(payload).encode("utf-8")
             req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
 
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=10, context=verified_tls_context()) as resp:
             pass
 
     def _send_discord(
@@ -495,71 +442,20 @@ class NotificationDispatcher:
             body = json.dumps(payload).encode("utf-8")
             req = urllib.request.Request(webhook_url, data=body, headers={"Content-Type": "application/json"}, method="POST")
 
-        with urllib.request.urlopen(req, timeout=8) as resp:
+        with urllib.request.urlopen(req, timeout=8, context=verified_tls_context()) as resp:
             pass
 
-    def _send_ntfy_video(
-        self,
-        cam_name: str,
-        label: str,
-        conf: float,
-        desc: str,
-        time_str: str,
-        video_bytes: bytes,
-        filename: str
-    ):
-        """Sends recorded MP4 video attachment via ntfy.sh."""
-        topic = self.ntfy_topic
-        server = self.ntfy_server
-        url = f"{server}/{topic}"
-
+    def _send_ntfy_video(self, cam_name, label, conf, desc, time_str, video_bytes, filename):
+        """Send a clip attachment, falling back to an honest text alert on HTTP 413."""
         conf_str = f" ({int(conf * 100)}%)" if conf > 0 else ""
-        clean_cam = cam_name.split(" (")[0].strip()
-        # Clean ASCII-safe title & message for HTTP headers
-        title = f"[Video Clip] {clean_cam} - {label.title()}{conf_str}"
-        safe_title = to_header_safe(title) or title
-        message = f"Play recorded incident clip (10s): {desc or label}"
-        safe_message = to_header_safe(message) or message
-
-        port = self.settings.get("web_port", 8080)
-        cloud_id = resolve_gdrive_file_id(filename)
-        if cloud_id:
-            direct_gdrive_url = f"https://drive.google.com/file/d/{cloud_id}/view"
-        else:
-            direct_gdrive_url = ""
-        gdrive_url = direct_gdrive_url or resolve_gdrive_url(filename, "alarms")
-
-        headers = {
-            "Title": safe_title,
-            "Priority": "high",
-            "Tags": "movie_camera,warning",
-            "Filename": filename if filename.endswith(".mp4") else "alert_clip.mp4",
-            "Message": safe_message,
-            "Actions": f"view, Watch on Google Drive, {gdrive_url}; view, Live Feed, {web_url}"
-        }
-        if direct_gdrive_url:
-            headers["Click"] = direct_gdrive_url
-
+        title = f"[Video Clip] {cam_name.split(' (')[0].strip()} - {label.title()}{conf_str}"
+        message = desc or f"{label.title()} incident clip recorded at {time_str}"
         try:
-            req = urllib.request.Request(url, data=video_bytes, headers=headers, method="PUT")
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                pass
-        except urllib.error.HTTPError as he:
-            if he.code == 413:
-                # Video file exceeds ntfy public limit (2MB) or daily quota: send link notification
-                fallback_headers = {
-                    "Title": safe_title,
-                    "Priority": "high",
-                    "Tags": "movie_camera,warning",
-                    "Click": gdrive_url,
-                    "Actions": f"view, Watch on Google Drive, {gdrive_url}; view, Live Feed, {web_url}"
-                }
-                fb_msg = f"Alert clip saved to Google Drive ({len(video_bytes) // 1024} KB). Tap to watch or download."
-                req_fb = urllib.request.Request(url, data=fb_msg.encode("utf-8"), headers=fallback_headers, method="POST")
-                with urllib.request.urlopen(req_fb, timeout=10) as resp:
-                    pass
-                return
-            raise
+            self._publish_ntfy(title, message, "movie_camera,warning", video_bytes, filename, timeout=20)
+        except urllib.error.HTTPError as error:
+            if error.code != 413:
+                raise
+            self._publish_ntfy(title, message + " (Clip saved locally; attachment exceeds the server upload limit.)", "movie_camera,warning")
 
     def _send_telegram_video(
         self,
@@ -595,7 +491,7 @@ class NotificationDispatcher:
         }
         body, content_type = encode_multipart_formdata(fields, files)
         req = urllib.request.Request(url, data=body, headers={"Content-Type": content_type}, method="POST")
-        with urllib.request.urlopen(req, timeout=25) as resp:
+        with urllib.request.urlopen(req, timeout=25, context=verified_tls_context()) as resp:
             pass
 
     def _send_discord_video(
@@ -617,7 +513,7 @@ class NotificationDispatcher:
         files = {"file": (filename if filename.endswith(".mp4") else "clip.mp4", video_bytes, "video/mp4")}
         body, content_type = encode_multipart_formdata(fields, files)
         req = urllib.request.Request(webhook_url, data=body, headers={"Content-Type": content_type}, method="POST")
-        with urllib.request.urlopen(req, timeout=20) as resp:
+        with urllib.request.urlopen(req, timeout=20, context=verified_tls_context()) as resp:
             pass
 
     def send_test_notification(self, service: str = "all") -> Tuple[bool, str]:
@@ -642,17 +538,17 @@ class NotificationDispatcher:
             if self.ntfy_enabled and self.ntfy_topic:
                 try:
                     self._send_ntfy(
-                        cam_name=test_cam,
-                        label="TEST_PERSON",
-                        conf=0.95,
-                        desc=test_desc,
+                        cam_name="CCTVPanelView",
+                        label="TEST",
+                        conf=0,
+                        desc="CCTVPanelView diagnostic: checking ntfy delivery. No camera data is included.",
                         time_str=now_str,
                         trigger_reason="Manual Test Trigger",
-                        snap_bytes=sample_jpg
+                        snap_bytes=None
                     )
-                    results.append("[OK] ntfy.sh: Notification dispatched successfully!")
+                    results.append("[OK] ntfy: Server accepted the text-only test. Check your phone.")
                 except Exception as e:
-                    results.append(f"[ERROR] ntfy.sh error: {e}")
+                    results.append("[ERROR] ntfy: " + self.ntfy_error_message(e))
             else:
                 results.append("[WARNING] ntfy.sh is disabled or topic name is unset.")
 

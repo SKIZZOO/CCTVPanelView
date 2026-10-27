@@ -660,6 +660,7 @@ class SettingsDialog(QDialog):
     """
     settings_saved = pyqtSignal(dict)
     check_updates_requested = pyqtSignal()
+    ntfy_test_finished = pyqtSignal(bool, str)
     camera_connection_updated = pyqtSignal(dict)
 
     def __init__(self, current_settings=None, cameras=None, selected_camera_id=None, parent=None):
@@ -689,6 +690,8 @@ class SettingsDialog(QDialog):
         self.resize(960, 680)
         self.setMinimumSize(820, 560)
         self._setup_ui()
+
+        self.ntfy_test_finished.connect(self._show_ntfy_test_result)
         self._initial_state = self._capture_current_dialog_state()
 
     def _create_masked_input(self, placeholder: str = "", text: str = "", width: Optional[int] = None, on_text_changed=None):
@@ -1162,6 +1165,15 @@ class SettingsDialog(QDialog):
         tf_layout.addWidget(btn_gen_topic)
         card_mobile.add_row(SettingRow("ntfy Topic (Secret Channel)", "Topic name subscribed in your ntfy mobile app", topic_frame))
 
+        self.btn_ntfy_test = QPushButton("Send text-only test")
+        self.btn_ntfy_test.setFixedHeight(32)
+        self.btn_ntfy_test.clicked.connect(self._test_ntfy_delivery)
+        self.lbl_ntfy_test = QLabel("Uses the topic above. No camera images or video are sent by this test.")
+        self.lbl_ntfy_test.setWordWrap(True)
+        self.lbl_ntfy_test.setStyleSheet("color: #94a3b8; font-size: 11px; padding: 8px 0;")
+        card_mobile.add_row(SettingRow("Test ntfy delivery", "Checks these current settings without waiting for a detection.", self.btn_ntfy_test))
+        card_mobile.add_row(self.lbl_ntfy_test)
+
         self.sw_send_video = ToggleSwitch(checked=self.settings.get("phone_notify_video", self.settings.get("send_video_to_phone", False)))
         card_mobile.add_row(SettingRow("Send Video Clip to Phone", "Include recorded MP4 clip (pre + post alarm)", self.sw_send_video))
 
@@ -1212,6 +1224,28 @@ class SettingsDialog(QDialog):
         import uuid
         secret = f"cctv_{uuid.uuid4().hex[:12]}"
         self.txt_ntfy_topic.setText(secret)
+
+    def _test_ntfy_delivery(self):
+        import threading
+        from core.notification_dispatcher import NotificationDispatcher
+        settings = {"ntfy_enabled": self.sw_ntfy_enabled.isChecked(),
+                    "ntfy_topic": self.txt_ntfy_topic.text().strip(),
+                    "ntfy_server": self.settings.get("ntfy_server", "")}
+        self.btn_ntfy_test.setEnabled(False)
+        self.lbl_ntfy_test.setText("Sending one text-only test in the background…")
+        def run():
+            try:
+                ok, message = NotificationDispatcher(settings).send_test_notification("ntfy")
+            except Exception as error:
+                ok, message = False, NotificationDispatcher.ntfy_error_message(error)
+            try: self.ntfy_test_finished.emit(ok, message)
+            except RuntimeError: pass
+        threading.Thread(target=run, daemon=True, name="NtfyTest").start()
+
+    def _show_ntfy_test_result(self, ok, message):
+        self.btn_ntfy_test.setEnabled(True)
+        self.lbl_ntfy_test.setText(message)
+        self.lbl_ntfy_test.setStyleSheet(f"color: {'#34d399' if ok else '#f87171'}; font-size: 11px; padding: 8px 0;")
 
     def _on_master_alerts_toggled(self, armed: bool):
         """Arming pauses/resumes delivery without rewriting category preferences."""

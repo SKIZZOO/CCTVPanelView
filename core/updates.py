@@ -9,6 +9,7 @@ import tempfile
 import urllib.request
 from urllib.parse import urlsplit
 from core.version import APP_VERSION, GITHUB_REPOSITORY
+from core.network_tls import verified_tls_context
 
 LATEST_URL = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/releases/latest"
 MAX_INSTALLER_BYTES = 1024 * 1024 * 1024
@@ -38,7 +39,7 @@ class GitHubRedirects(urllib.request.HTTPRedirectHandler):
 def open_url(url):
     validate_download_url(url)
     request = urllib.request.Request(url, headers={"User-Agent": f"CCTVPanelView/{APP_VERSION}", "Accept": "application/vnd.github+json" if url == LATEST_URL else "application/octet-stream"})
-    return urllib.request.build_opener(GitHubRedirects()).open(request, timeout=20)
+    return urllib.request.build_opener(GitHubRedirects(), urllib.request.HTTPSHandler(context=verified_tls_context())).open(request, timeout=20)
 
 
 @dataclass(frozen=True)

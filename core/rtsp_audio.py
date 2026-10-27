@@ -145,8 +145,8 @@ class RTSPBackchannel:
     def connect(self):
         self.sock = socket.create_connection((self.host, self.port), timeout=3)
         if self.tls:
-            import ssl
-            self.sock = ssl.create_default_context().wrap_socket(self.sock, server_hostname=self.host)
+            from core.network_tls import verified_tls_context
+            self.sock = verified_tls_context().wrap_socket(self.sock, server_hostname=self.host)
         self.sock.settimeout(.3)
         headers, sdp = self.request("DESCRIBE", headers={"Accept": "application/sdp"})
         track, self.payload, self.codec = select_audio_track(sdp, headers.get("content-base", self.uri.rstrip("/") + "/"))
