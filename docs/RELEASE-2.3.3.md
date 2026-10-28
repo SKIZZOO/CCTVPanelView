@@ -8,6 +8,8 @@ Compact H.264/AAC previews, bounded background encoding, local originals and out
 
 Previews now stay below 850 KB to cover 1 MB attachment download thresholds. Full-resolution recordings are unchanged. The synthetic native attachment was confirmed playable on the user's iPhone.
 
-## Optional full recordings through Google Drive
+## Full recordings through a folder picker
 
-Adds a selectable private Google Drive folder-link mode. A text-only ntfy notification identifies the recording filename/size and opens your configured private folder. It supports full local recordings such as 100 MB without reading/compressing/uploading those bytes to ntfy. Drive for desktop must sync the recording directory, and the phone must sign in with a permitted Google account. It does not confirm cloud upload or bypass Drive processing/storage limits. Folder sharing remains unchanged. Direct attachment mode remains available.
+Select a synced folder on Google Drive for desktop's virtual drive. Its private browser link is resolved automatically from local Drive metadata. Completed recordings already inside it stay in place; others are copied there in bounded chunks without overwriting originals. A small ntfy notification identifies the file/size and opens the private folder. This supports files such as 100 MB without uploading those bytes to ntfy or requiring API setup/pasted links.
+
+Google Drive must finish syncing and processing before playback. The notification does not confirm cloud upload. Sharing is unchanged. Non-Drive folders, unavailable drives, temporary local folder IDs and unsupported metadata produce a clear error instead of a guessed link. Local metadata resolution was verified against the existing Drive for desktop recordings folder on the user's PC. Native attachment playback was confirmed on iPhone using one authorized synthetic video.

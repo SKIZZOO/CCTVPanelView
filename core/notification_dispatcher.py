@@ -22,6 +22,7 @@ from datetime import datetime
 from core.notification_policy import allows_notification
 from core.network_tls import verified_tls_context
 from core.phone_video import prepare_phone_video
+from core.drive_folder import stage_drive_recording
 
 _phone_video_slots = threading.BoundedSemaphore(1)
 
@@ -293,7 +294,15 @@ class NotificationDispatcher:
         if self.ntfy_enabled and self.ntfy_topic:
             try:
                 if self.settings.get("ntfy_video_delivery", "preview") == "google_drive_folder":
-                    self._send_ntfy_drive_folder(cam_name, label, time_str, filename, file_size)
+                    folder = self.settings.get("ntfy_google_drive_local_folder", "").strip()
+                    link = None
+                    if folder:
+                        with _phone_video_slots:
+                            if not self.is_phone_enabled or not self.notify_video_enabled or not self.should_notify_label(label, alert_entry):
+                                return
+                            link, filename = stage_drive_recording(video_path, folder)
+                    if self.is_phone_enabled and self.notify_video_enabled and self.should_notify_label(label, alert_entry):
+                        self._send_ntfy_drive_folder(cam_name, label, time_str, filename, file_size, folder_link=link)
                 else:
                     with _phone_video_slots:
                         if not self.is_phone_enabled or not self.notify_video_enabled or not self.should_notify_label(label, alert_entry):
@@ -387,8 +396,8 @@ class NotificationDispatcher:
             raise ValueError("ntfy did not acknowledge a published message.")
         return accepted
 
-    def _send_ntfy_drive_folder(self, cam_name, label, time_str, filename, file_size):
-        link = private_drive_folder_url(self.settings.get("ntfy_google_drive_folder_url"))
+    def _send_ntfy_drive_folder(self, cam_name, label, time_str, filename, file_size, folder_link=None):
+        link = private_drive_folder_url(folder_link or self.settings.get("ntfy_google_drive_folder_url"))
         message = (f"{label.title()} recorded at {time_str}. File: {filename} "
                    f"({file_size / 1_000_000:.1f} MB). Open the private Drive folder and select this file. "
                    "Wait for Google Drive for desktop to finish syncing and Drive to process the video. "

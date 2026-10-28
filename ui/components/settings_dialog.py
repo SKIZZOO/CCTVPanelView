@@ -661,6 +661,7 @@ class SettingsDialog(QDialog):
     settings_saved = pyqtSignal(dict)
     check_updates_requested = pyqtSignal()
     ntfy_test_finished = pyqtSignal(bool, str)
+    ntfy_drive_folder_resolved = pyqtSignal(int, str, str, str)
     camera_connection_updated = pyqtSignal(dict)
 
     def __init__(self, current_settings=None, cameras=None, selected_camera_id=None, parent=None):
@@ -692,6 +693,7 @@ class SettingsDialog(QDialog):
         self._setup_ui()
 
         self.ntfy_test_finished.connect(self._show_ntfy_test_result)
+        self.ntfy_drive_folder_resolved.connect(self._show_ntfy_drive_folder_result)
         self._initial_state = self._capture_current_dialog_state()
 
     def _create_masked_input(self, placeholder: str = "", text: str = "", width: Optional[int] = None, on_text_changed=None):
@@ -1184,13 +1186,33 @@ class SettingsDialog(QDialog):
         selected_mode = self.cmb_ntfy_video_delivery.findData(self.settings.get("ntfy_video_delivery", "preview"))
         self.cmb_ntfy_video_delivery.setCurrentIndex(max(0, selected_mode))
         card_mobile.add_row(SettingRow("ntfy video delivery", "Drive mode supports full files such as 100 MB without uploading them to ntfy.", self.cmb_ntfy_video_delivery))
+        folder_controls = QWidget()
+        folder_layout = QHBoxLayout(folder_controls)
+        folder_layout.setContentsMargins(0, 0, 0, 0)
+        self.txt_ntfy_drive_local_folder = QLineEdit()
+        self.txt_ntfy_drive_local_folder.setReadOnly(True)
+        self.txt_ntfy_drive_local_folder.setFixedWidth(160)
+        self.txt_ntfy_drive_local_folder.setText(self.settings.get("ntfy_google_drive_local_folder", self.settings.get("recording_dir", "")))
+        self.btn_ntfy_drive_browse = QPushButton("Choose folder")
+        self.btn_ntfy_drive_browse.clicked.connect(self._browse_ntfy_drive_folder)
+        self.btn_ntfy_drive_check = QPushButton("Check")
+        self.btn_ntfy_drive_check.clicked.connect(self._resolve_ntfy_drive_folder)
+        folder_layout.addWidget(self.txt_ntfy_drive_local_folder)
+        folder_layout.addWidget(self.btn_ntfy_drive_browse)
+        folder_layout.addWidget(self.btn_ntfy_drive_check)
+        card_mobile.add_row(SettingRow("Google Drive folder on this PC", "Choose a synced folder in Drive for desktop. Completed recordings are copied here if needed; the private web link is detected automatically.", folder_controls))
         self.txt_ntfy_drive_folder = QLineEdit()
         self.txt_ntfy_drive_folder.setFixedWidth(260)
-        self.txt_ntfy_drive_folder.setPlaceholderText("https://drive.google.com/drive/folders/...")
+        self.txt_ntfy_drive_folder.setReadOnly(True)
+        self.txt_ntfy_drive_folder.setPlaceholderText("Detected automatically from your selected folder")
         self.txt_ntfy_drive_folder.setText(self.settings.get("ntfy_google_drive_folder_url", ""))
-        self.txt_ntfy_drive_folder.setEnabled(self.cmb_ntfy_video_delivery.currentData() == "google_drive_folder")
-        self.cmb_ntfy_video_delivery.currentIndexChanged.connect(lambda: self.txt_ntfy_drive_folder.setEnabled(self.cmb_ntfy_video_delivery.currentData() == "google_drive_folder"))
-        card_mobile.add_row(SettingRow("Private Google Drive folder link", "Keep sharing Restricted. Set Storage recording folder inside Google Drive for desktop. The alert opens this folder; choose the named file after sync completes.", self.txt_ntfy_drive_folder))
+        card_mobile.add_row(SettingRow("Detected private Drive link", "Keep sharing Restricted. Open the folder from ntfy and select the named video after Drive finishes syncing.", self.txt_ntfy_drive_folder))
+        self.lbl_ntfy_drive_status = QLabel("No Google password, API setup or public sharing required. Drive for desktop must be running.")
+        self.lbl_ntfy_drive_status.setWordWrap(True)
+        card_mobile.add_row(self.lbl_ntfy_drive_status)
+        for control in (self.txt_ntfy_drive_local_folder, self.btn_ntfy_drive_browse, self.btn_ntfy_drive_check, self.txt_ntfy_drive_folder):
+            control.setEnabled(self.cmb_ntfy_video_delivery.currentData() == "google_drive_folder")
+        self.cmb_ntfy_video_delivery.currentIndexChanged.connect(self._update_ntfy_drive_controls)
 
         self.sw_telegram_enabled = ToggleSwitch(checked=self.settings.get("telegram_enabled", False))
         card_mobile.add_row(SettingRow("Enable Telegram Bot Alerts", "Send photos and clips directly to your Telegram chat or channel", self.sw_telegram_enabled))
@@ -1239,6 +1261,43 @@ class SettingsDialog(QDialog):
         import uuid
         secret = f"cctv_{uuid.uuid4().hex[:12]}"
         self.txt_ntfy_topic.setText(secret)
+
+    def _update_ntfy_drive_controls(self):
+        enabled = self.cmb_ntfy_video_delivery.currentData() == "google_drive_folder"
+        for control in (self.txt_ntfy_drive_local_folder, self.btn_ntfy_drive_browse, self.btn_ntfy_drive_check, self.txt_ntfy_drive_folder):
+            control.setEnabled(enabled)
+        if enabled and self.txt_ntfy_drive_local_folder.text():
+            self._resolve_ntfy_drive_folder()
+
+    def _browse_ntfy_drive_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Choose Google Drive for desktop folder", self.txt_ntfy_drive_local_folder.text())
+        if folder:
+            self.txt_ntfy_drive_local_folder.setText(folder)
+            self._resolve_ntfy_drive_folder()
+
+    def _resolve_ntfy_drive_folder(self):
+        import threading
+        from core.drive_folder import resolve_drive_folder_url
+        folder = self.txt_ntfy_drive_local_folder.text().strip()
+        self._ntfy_drive_resolve_serial = getattr(self, "_ntfy_drive_resolve_serial", 0) + 1
+        serial = self._ntfy_drive_resolve_serial
+        self.txt_ntfy_drive_folder.clear()
+        self.lbl_ntfy_drive_status.setText("Checking Drive folder in the background...")
+        def resolve():
+            try: link, error = resolve_drive_folder_url(folder), ""
+            except Exception as failure:
+                link = ""
+                error = str(failure) if isinstance(failure, ValueError) else "Could not access the Drive folder. Check Drive for desktop."
+            try: self.ntfy_drive_folder_resolved.emit(serial, folder, link, error)
+            except RuntimeError: pass
+        threading.Thread(target=resolve, daemon=True, name="DriveFolderCheck").start()
+
+    def _show_ntfy_drive_folder_result(self, serial, folder, link, error):
+        if serial != getattr(self, "_ntfy_drive_resolve_serial", 0) or folder != self.txt_ntfy_drive_local_folder.text().strip():
+            return
+        self.txt_ntfy_drive_folder.setText(link)
+        self.lbl_ntfy_drive_status.setText(error or "Private Drive link detected. Full recordings will sync through Drive for desktop; sharing stays unchanged.")
+        self.lbl_ntfy_drive_status.setStyleSheet("color: " + ("#f87171" if error else "#34d399") + ";")
 
     def _test_ntfy_delivery(self):
         import threading
@@ -2413,6 +2472,7 @@ class SettingsDialog(QDialog):
             "ntfy_topic": self.txt_ntfy_topic.text().strip() if hasattr(self, "txt_ntfy_topic") else "",
             "ntfy_video_delivery": self.cmb_ntfy_video_delivery.currentData(),
             "ntfy_google_drive_folder_url": self.txt_ntfy_drive_folder.text().strip(),
+            "ntfy_google_drive_local_folder": self.txt_ntfy_drive_local_folder.text().strip(),
             "send_video_to_phone": self.sw_send_video.isChecked() if hasattr(self, "sw_send_video") else False,
             "phone_notify_video": self.sw_send_video.isChecked() if hasattr(self, "sw_send_video") else False,
             "telegram_enabled": self.sw_telegram_enabled.isChecked() if hasattr(self, "sw_telegram_enabled") else False,
@@ -2524,6 +2584,7 @@ class SettingsDialog(QDialog):
             "ntfy_topic": self.txt_ntfy_topic.text().strip() if hasattr(self, "txt_ntfy_topic") else "",
             "ntfy_video_delivery": self.cmb_ntfy_video_delivery.currentData(),
             "ntfy_google_drive_folder_url": self.txt_ntfy_drive_folder.text().strip(),
+            "ntfy_google_drive_local_folder": self.txt_ntfy_drive_local_folder.text().strip(),
             "send_video_to_phone": self.sw_send_video.isChecked() if hasattr(self, "sw_send_video") else False,
             "telegram_enabled": self.sw_telegram_enabled.isChecked() if hasattr(self, "sw_telegram_enabled") else False,
             "telegram_token": self.txt_tg_token.text().strip() if hasattr(self, "txt_tg_token") else "",

@@ -65,6 +65,29 @@ class DriveFolderSettingsTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls): cls.app = QApplication.instance() or QApplication([])
 
+    def test_folder_picker_resolves_link_in_background_without_pasting(self):
+        import threading
+        import time
+        dialog = SettingsDialog({"ntfy_video_delivery": "google_drive_folder"})
+        observed = []
+        def resolve(folder):
+            observed.append((folder, threading.get_ident()))
+            time.sleep(.1)
+            return LINK
+        with patch("ui.components.settings_dialog.QFileDialog.getExistingDirectory", return_value="X:/My Drive/CCTV"), \
+             patch("core.drive_folder.resolve_drive_folder_url", side_effect=resolve):
+            started = time.monotonic()
+            dialog._browse_ntfy_drive_folder()
+            self.assertLess(time.monotonic() - started, .08)
+            deadline = time.monotonic() + 2
+            while not dialog.txt_ntfy_drive_folder.text() and time.monotonic() < deadline:
+                self.app.processEvents(); time.sleep(.005)
+        self.assertEqual(dialog.txt_ntfy_drive_folder.text(), LINK)
+        self.assertEqual(observed[0][0], "X:/My Drive/CCTV")
+        self.assertNotEqual(observed[0][1], threading.get_ident())
+        self.assertTrue(dialog.txt_ntfy_drive_folder.isReadOnly())
+        dialog.deleteLater(); self.app.processEvents()
+
     def test_folder_mode_and_url_save_and_restore_without_enabling_sharing(self):
         dialog = SettingsDialog({})
         self.assertEqual(dialog.cmb_ntfy_video_delivery.currentData(), "preview")
