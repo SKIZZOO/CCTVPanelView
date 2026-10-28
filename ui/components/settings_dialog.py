@@ -934,7 +934,7 @@ class SettingsDialog(QDialog):
             self.sidebar.takeItem(6)
         self.settings_search = QLineEdit()
         self.settings_search.setStyleSheet("QLineEdit { background: #111827; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px; padding: 8px 12px; min-height: 20px; }")
-        self.settings_search.setPlaceholderText("Find a setting: volume, camera, retention, detectionâ€¦")
+        self.settings_search.setPlaceholderText("Find a setting: volume, camera, retention, detection…")
         self.settings_search.textChanged.connect(self._search_settings)
         root_layout.insertWidget(1, self.settings_search)
         self.settings_search_feedback = QLabel("No matching settings. Try a shorter search.")
@@ -1069,7 +1069,7 @@ class SettingsDialog(QDialog):
         updates_card = SettingCard("Application updates", f"Installed version {APP_VERSION}. Check the official GitHub stable release and verify installer downloads.")
         self.sw_auto_updates = ToggleSwitch(checked=self.settings.get("auto_check_updates", True))
         updates_card.add_row(SettingRow("Automatically check for updates", "Checks in the background after startup and every six hours. Downloads and installation wait for your action.", self.sw_auto_updates))
-        self.btn_check_updates = QPushButton("Check for updatesâ€¦")
+        self.btn_check_updates = QPushButton("Check for updates")
         self.btn_check_updates.clicked.connect(self.check_updates_requested.emit)
         updates_card.add_row(SettingRow("Download and install", "Save your layout and update the existing installation folder.", self.btn_check_updates))
         layout.addWidget(updates_card)
@@ -1306,7 +1306,7 @@ class SettingsDialog(QDialog):
                     "ntfy_topic": self.txt_ntfy_topic.text().strip(),
                     "ntfy_server": self.settings.get("ntfy_server", "")}
         self.btn_ntfy_test.setEnabled(False)
-        self.lbl_ntfy_test.setText("Sending one text-only test in the backgroundâ€¦")
+        self.lbl_ntfy_test.setText("Sending one text-only test in the background…")
         def run():
             try:
                 ok, message = NotificationDispatcher(settings).send_test_notification("ntfy")
@@ -1617,7 +1617,7 @@ class SettingsDialog(QDialog):
         has_pwd = bool(str(cam.get("password", "")).strip())
         is_cfg = cam.get("configured") is not False and bool(cam.get("streams"))
         cfg_tag = "" if is_cfg else " [Needs Setup]"
-        return f"{name}  â€¢  {lens_tag}{cfg_tag}"
+        return f"{name}  •  {lens_tag}{cfg_tag}"
 
     def _update_camera_badges(self, cam: dict):
         if not cam or not hasattr(self, "badge_cam_lens"):
@@ -2017,7 +2017,7 @@ class SettingsDialog(QDialog):
         self.btn_test_conn.setText("Test Connection")
         if (self.txt_cam_url1.text().strip() != getattr(self, "_tested_url", "") or
                 self.cmb_active_cam.currentData() != getattr(self, "_tested_camera_id", None)):
-            self.lbl_test_badge.setText("Settings changed â€” test again")
+            self.lbl_test_badge.setText("Settings changed — test again")
             return
         if success:
             self.lbl_test_badge.setText("Online / Verified")
@@ -2345,7 +2345,7 @@ class SettingsDialog(QDialog):
         self.txt_custom_sound = QLineEdit(self.settings.get("custom_sound_path", ""))
         self.txt_custom_sound.setPlaceholderText("Uncompressed PCM WAV file")
         custom_layout.addWidget(self.txt_custom_sound)
-        browse_sound = QPushButton("Browseâ€¦")
+        browse_sound = QPushButton("Browse…")
         browse_sound.clicked.connect(self._browse_sound)
         custom_layout.addWidget(browse_sound)
         card_snd.add_row(SettingRow("Custom sound file", "Choose Custom WAV File above to use this file", custom_row))
@@ -2374,7 +2374,7 @@ class SettingsDialog(QDialog):
             self.cmb_sound_profile.setCurrentIndex(self.cmb_sound_profile.findData(SoundProfile.CUSTOM))
 
     def _sound_preview_result(self):
-        self.sound_feedback.setText(self.sound_manager.last_error or "Preview complete â€” output uses the Windows default playback device.")
+        self.sound_feedback.setText(self.sound_manager.last_error or "Preview complete — output uses the Windows default playback device.")
 
     def _test_sound(self):
         if self.sound_manager:
@@ -2385,7 +2385,7 @@ class SettingsDialog(QDialog):
                 self.sound_feedback.setText("Choose an existing PCM WAV file first.")
                 return
             self.sound_manager.play_test_tone(profile, volume, custom_path=custom)
-            self.sound_feedback.setText("Muted" if volume == 0 else f"Playing preview at {volume}%â€¦")
+            self.sound_feedback.setText("Muted" if volume == 0 else f"Playing preview at {volume}%…")
             self._preview_timer.start(1200)
 
     # -------------------------------------------------------------

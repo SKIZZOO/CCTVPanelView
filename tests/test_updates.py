@@ -160,6 +160,15 @@ class UpdateUiTests(unittest.TestCase):
         self.assertFalse(saved[0]["auto_check_updates"])
         dialog.deleteLater(); self.app.processEvents()
 
+    def test_settings_update_text_is_clean_unicode(self):
+        from PyQt6.QtWidgets import QLabel, QPushButton
+        dialog = SettingsDialog({})
+        self.assertEqual(dialog.btn_check_updates.text(), "Check for updates")
+        for widget in dialog.findChildren(QLabel) + dialog.findChildren(QPushButton):
+            for broken in ("\u00e2\u20ac", "\ufffd"):
+                self.assertNotIn(broken, widget.text())
+        dialog.deleteLater(); self.app.processEvents()
+
     def test_installer_reuses_registered_folder_and_does_not_reopen_setup(self):
         import installer
         with tempfile.TemporaryDirectory() as temp:
@@ -185,6 +194,63 @@ class WorkstationUpgradeTests(unittest.TestCase):
         self.window = self.fixture.window
 
     def tearDown(self): self.fixture.tearDown()
+
+    def test_update_banner_is_at_top_and_not_now_never_downloads_or_installs(self):
+        release = parse_release(release_data())
+        manager = self.window._get_update_manager(); manager.release = release
+        with patch.object(self.window, "isVisible", return_value=True), \
+             patch.object(self.window, "isActiveWindow", return_value=True), \
+             patch.object(self.window, "isMinimized", return_value=False), \
+             patch("ui.main_window.QApplication.activeModalWidget", return_value=None), \
+             patch.object(manager, "download") as download, \
+             patch.object(self.window, "_install_downloaded_update") as install:
+            self.window._on_update_checked(release)
+            prompt = self.window._update_prompt
+            self.assertIsNotNone(prompt)
+            self.assertEqual(self.window.central_widget.layout().indexOf(self.window.update_banner), 1)
+            self.assertIn("9.0.0", self.window.update_banner.message.text())
+            next(button for button in prompt.buttons() if button.text() == "Not now").click()
+            QApplication.processEvents()
+            self.assertIsNone(self.window._update_prompt)
+            self.assertFalse(self.window.update_banner.isHidden())
+            self.window._on_update_checked(release)
+            self.assertIsNone(self.window._update_prompt)
+            download.assert_not_called(); install.assert_not_called()
+
+    def test_accepting_update_opens_verified_download_flow_only_after_consent(self):
+        release = parse_release(release_data())
+        self.window._get_update_manager().release = release
+        with patch.object(self.window, "isVisible", return_value=True), \
+             patch.object(self.window, "isActiveWindow", return_value=True), \
+             patch.object(self.window, "isMinimized", return_value=False), \
+             patch("ui.main_window.QApplication.activeModalWidget", return_value=None), \
+             patch.object(self.window, "open_update_dialog") as open_dialog:
+            self.window._on_update_checked(release)
+            open_dialog.assert_not_called()
+            prompt = self.window._update_prompt
+            next(button for button in prompt.buttons() if button.text() == "Update now").click()
+            open_dialog.assert_called_once_with(auto_download=True)
+            QApplication.processEvents()
+
+    def test_background_update_waits_for_foreground_before_prompting(self):
+        release = parse_release(release_data())
+        self.window._get_update_manager().release = release
+        with patch.object(self.window, "isVisible", return_value=False):
+            self.window._on_update_checked(release)
+        self.assertIsNone(getattr(self.window, "_update_prompt", None))
+        with patch.object(self.window, "isVisible", return_value=True), \
+             patch.object(self.window, "isActiveWindow", return_value=True), \
+             patch.object(self.window, "isMinimized", return_value=False), \
+             patch("ui.main_window.QApplication.activeModalWidget", return_value=None):
+            self.window._maybe_prompt_update()
+            self.assertIsNotNone(self.window._update_prompt)
+            self.window._update_prompt.reject()
+            QApplication.processEvents()
+
+    def test_current_or_older_release_does_not_show_an_update_notice(self):
+        self.window._on_update_checked(parse_release(release_data(version="1.0.0")))
+        self.assertTrue(self.window.update_banner.isHidden())
+        self.assertIsNone(getattr(self.window, "_update_prompt", None))
 
     def test_install_handoff_saves_layout_and_passes_current_directory_without_scripts(self):
         payload = b"fixture installer"; release = parse_release(release_data(payload))

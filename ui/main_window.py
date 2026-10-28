@@ -953,6 +953,10 @@ class MainWindow(QMainWindow):
         self._update_global_quality_btn_style()
 
         root_layout.addWidget(top_bar)
+        from ui.components.update_banner import UpdateBanner
+        self.update_banner = UpdateBanner(central_widget)
+        self.update_banner.review_requested.connect(self.open_update_dialog)
+        root_layout.addWidget(self.update_banner)
 
         # High-visibility Alarm Notification Toast Overlay (Floats over top of central widget with zero layout shift)
         self.alarm_banner = QLabel(central_widget)
@@ -1991,14 +1995,63 @@ class MainWindow(QMainWindow):
     def _on_update_checked(self, release):
         from core.updates import version_tuple
         from core.version import APP_VERSION
-        if version_tuple(release.version) > version_tuple(APP_VERSION):
-            self.statusBar().showMessage(f"CCTVPanelView {release.version} is available. Open Settings > General & layout > Application updates.", 15000)
+        self._available_update_release = release
+        if version_tuple(release.version) <= version_tuple(APP_VERSION):
+            self.update_banner.hide()
+            return
+        self.update_banner.show_release(release.version)
+        dialog = getattr(self, "_update_dialog", None)
+        if dialog is not None and dialog.isVisible():
+            self._prompted_update_versions = getattr(self, "_prompted_update_versions", set())
+            self._prompted_update_versions.add(release.version)
+            return
+        self._maybe_prompt_update()
 
-    def open_update_dialog(self):
+    def _maybe_prompt_update(self):
+        from core.updates import version_tuple
+        from core.version import APP_VERSION
+        release = getattr(self, "_available_update_release", None)
+        if (release is None or version_tuple(release.version) <= version_tuple(APP_VERSION)
+                or getattr(self, "_closing", False) or not self.isVisible()
+                or self.isMinimized() or not self.isActiveWindow()
+                or QApplication.activeModalWidget() is not None):
+            return
+        prompted = getattr(self, "_prompted_update_versions", set())
+        if release.version in prompted:
+            return
+        existing = getattr(self, "_update_prompt", None)
+        if existing is not None and existing.isVisible():
+            return
+        prompted.add(release.version)
+        self._prompted_update_versions = prompted
+        prompt = QMessageBox(self)
+        prompt.setWindowTitle("CCTVPanelView update available")
+        prompt.setIcon(QMessageBox.Icon.Information)
+        prompt.setText(f"CCTVPanelView {release.version} is available. Update now?")
+        prompt.setInformativeText("Download the verified update now, or choose Not now. Installation will ask before closing the workstation.")
+        prompt.setWindowModality(Qt.WindowModality.NonModal)
+        download_button = prompt.addButton("Update now", QMessageBox.ButtonRole.AcceptRole)
+        later_button = prompt.addButton("Not now", QMessageBox.ButtonRole.RejectRole)
+        prompt.setDefaultButton(later_button)
+        self._update_prompt = prompt
+        def finished(result):
+            if prompt.clickedButton() == download_button:
+                current = self._get_update_manager().release
+                self.open_update_dialog(auto_download=bool(current and current.version == release.version))
+            prompt.deleteLater()
+            if getattr(self, "_update_prompt", None) is prompt:
+                self._update_prompt = None
+            QTimer.singleShot(0, self._maybe_prompt_update)
+        prompt.finished.connect(finished)
+        prompt.show()
+
+    def open_update_dialog(self, auto_download=False):
         from ui.components.update_dialog import UpdateDialog
         if not hasattr(self, "_update_dialog"):
             self._update_dialog = UpdateDialog(self._get_update_manager(), self)
             self._update_dialog.install_requested.connect(self._install_downloaded_update)
+        if auto_download and not self._get_update_manager().busy and not self._get_update_manager().installer_path:
+            QTimer.singleShot(0, self._update_dialog._download)
         self._update_dialog.exec()
 
     def _install_downloaded_update(self):
@@ -4873,6 +4926,7 @@ class MainWindow(QMainWindow):
     def showEvent(self, event):
         super().showEvent(event)
         self._apply_window_corners()
+        QTimer.singleShot(0, self._maybe_prompt_update)
         if not self._startup_view_activated:
             self._startup_timer.start(0)
 
@@ -4928,6 +4982,8 @@ class MainWindow(QMainWindow):
             if hasattr(self, "stats_timer"):
                 self.stats_timer.setInterval(5000 if is_min else 1000)
         elif event.type() == QEvent.Type.ActivationChange:
+            if self.isActiveWindow():
+                QTimer.singleShot(0, self._maybe_prompt_update)
             is_active = self.isActiveWindow()
             for worker in self.active_workers.values():
                 worker.set_background_throttle(not is_active)

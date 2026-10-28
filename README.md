@@ -8,7 +8,7 @@
 
 A desktop viewer for RTSP/ONVIF IP cameras, with motion alerts, optional on-device object detection, local recording, and a browser interface for phones and tablets.
 
-[**Download for Windows**](https://github.com/SKIZZOO/CCTVPanelView/releases/latest) Â· [Features](#what-you-can-do) Â· [Quick start](#install-the-windows-release) Â· [Security](#security-and-privacy) Â· [2.3.4 animated startup and taskbar icons](docs/RELEASE-2.3.4.md)
+[**Download for Windows**](https://github.com/SKIZZOO/CCTVPanelView/releases/latest) Â· [Features](#what-you-can-do) Â· [Quick start](#install-the-windows-release) Â· [Security](#security-and-privacy) Â· [2.3.5 update prompts and clean settings text](docs/RELEASE-2.3.5.md)
 
 ![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4)
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776ab)
@@ -242,3 +242,7 @@ Small MP4 attachment mode remains available; outgoing category filters apply to 
 The animated camera intro runs in its own lightweight process while the workstation loads, so application imports and window construction do not freeze the animation. It hands over as soon as the main window is ready, without a forced startup delay, and closes automatically if the main process exits. Click or press Escape to skip the intro.
 
 Windows shortcuts use the executable's embedded icon and the same app identity as the running app. Upgrades restore legacy icon paths used by older pinned shortcuts. The installer creates native Windows shortcuts without temporary script launchers.
+
+## Available updates at the top of the app
+
+When a background check finds a newer stable release, a banner appears below the top toolbar. While CCTVPanelView is active, a prompt offers **Update now** or **Not now** once per new version each session. Update now opens the verified download flow; installation still requires **Install and restart**. Not now keeps the banner available through **Review update** and does not download or install anything. Hidden/minimized/background windows wait until the app is active before prompting. Checks remain optional under Settings.
