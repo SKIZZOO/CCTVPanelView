@@ -1174,8 +1174,8 @@ class SettingsDialog(QDialog):
         card_mobile.add_row(SettingRow("Test ntfy delivery", "Checks these current settings without waiting for a detection.", self.btn_ntfy_test))
         card_mobile.add_row(self.lbl_ntfy_test)
 
-        self.sw_send_video = ToggleSwitch(checked=self.settings.get("phone_notify_video", self.settings.get("send_video_to_phone", False)))
-        card_mobile.add_row(SettingRow("Send Video Clip to Phone", "Include recorded MP4 clip (pre + post alarm)", self.sw_send_video))
+        self.sw_send_video = ToggleSwitch(checked=self.settings.get("phone_notify_video", self.settings.get("send_video_to_phone", True)))
+        card_mobile.add_row(SettingRow("Send Video Clip to Phone", "ntfy: compact MP4 preview with Open video; full recording stays on this PC", self.sw_send_video))
 
         self.sw_telegram_enabled = ToggleSwitch(checked=self.settings.get("telegram_enabled", False))
         card_mobile.add_row(SettingRow("Enable Telegram Bot Alerts", "Send photos and clips directly to your Telegram chat or channel", self.sw_telegram_enabled))

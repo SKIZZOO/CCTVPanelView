@@ -87,7 +87,7 @@ def run_self_test(argv):
         class OfflineNtfyResponse:
             def __enter__(self): return self
             def __exit__(self, *args): return False
-            def read(self, limit): return b'{"id":"offline-fixture","event":"message"}'
+            def read(self, limit): return b'{"id":"offline-fixture","event":"message","attachment":{"url":"https://ntfy.sh/file/fixture.mp4"}}'
         original_open = notification_module.urllib.request.urlopen
         try:
             requests = []
@@ -100,7 +100,7 @@ def run_self_test(argv):
             notifier = NotificationDispatcher({"ntfy_enabled": True, "ntfy_topic": "offline-fixture"})
             notifier._send_ntfy("Fixture", "PERSON", .9, "Offline fixture", "12:00", "fixture", b"jpeg-fixture")
             notifier._send_ntfy_video("Fixture", "PERSON", .9, "Offline fixture", "12:00", b"video-fixture", "fixture.mp4")
-            checks["ntfy_photo_video_requests"] = [request.get_method() for request in requests] == ["PUT", "PUT"]
+            checks["ntfy_photo_video_requests"] = [request.get_method() for request in requests] == ["PUT", "PUT", "POST"]
         finally:
             notification_module.urllib.request.urlopen = original_open
         with tempfile.TemporaryDirectory() as temp:

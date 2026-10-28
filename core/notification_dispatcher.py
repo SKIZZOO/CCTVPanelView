@@ -21,6 +21,9 @@ from typing import Dict, Any, Optional, Tuple, List
 from datetime import datetime
 from core.notification_policy import allows_notification
 from core.network_tls import verified_tls_context
+from core.phone_video import prepare_phone_video
+
+_phone_video_slots = threading.BoundedSemaphore(1)
 
 
 def get_local_lan_ip() -> str:
@@ -256,21 +259,16 @@ class NotificationDispatcher:
         desc = alert_entry.get("description", "")
         time_str = alert_entry.get("time_short", datetime.now().strftime("%H:%M:%S"))
 
-        video_path = (
-            alert_entry.get("video_highlighted_path") or
-            alert_entry.get("video_path") or
-            alert_entry.get("video_raw_path")
-        )
+        video_path = next((alert_entry.get(key) for key in
+                           ("video_highlighted_path", "video_path", "video_raw_path")
+                           if alert_entry.get(key) and os.path.isfile(alert_entry[key])), None)
         if not video_path or not os.path.exists(video_path):
             return
 
         try:
             file_size = os.path.getsize(video_path)
-            # Require at least 2KB and maximum 15MB (ntfy upload limit)
-            if file_size <= 2048 or file_size > 15 * 1024 * 1024:
+            if file_size <= 2048:
                 return
-            with open(video_path, "rb") as f:
-                video_bytes = f.read()
         except Exception as e:
             print(f"[Notifier] Failed reading video file for dispatch: {e}")
             return
@@ -280,9 +278,27 @@ class NotificationDispatcher:
         # 1. ntfy.sh Video Push
         if self.ntfy_enabled and self.ntfy_topic:
             try:
-                self._send_ntfy_video(cam_name, label, conf, desc, time_str, video_bytes, filename)
+                with _phone_video_slots:
+                    if not self.is_phone_enabled or not self.notify_video_enabled or not self.should_notify_label(label, alert_entry):
+                        return
+                    preview = prepare_phone_video(video_path)
+                if self.is_phone_enabled and self.notify_video_enabled and self.should_notify_label(label, alert_entry):
+                    self._send_ntfy_video(cam_name, label, conf, desc, time_str, preview, "incident-preview.mp4")
             except Exception as e:
                 print("[Notifier] ntfy video push error: " + self.ntfy_error_message(e))
+                try:
+                    if self.is_phone_enabled and self.notify_video_enabled and self.should_notify_label(label, alert_entry):
+                        self._publish_ntfy("Video preview unavailable", "The recording is saved on your PC. " + self.ntfy_error_message(e), "movie_camera,warning")
+                except Exception as fallback_error:
+                    print("[Notifier] ntfy fallback error: " + self.ntfy_error_message(fallback_error))
+
+        # Other providers retain their full clip, without unbounded file reads.
+        if file_size > 15 * 1024 * 1024 or not (self.telegram_enabled or self.discord_enabled):
+            return
+        with open(video_path, "rb") as stream:
+            video_bytes = stream.read(15 * 1024 * 1024 + 1)
+        if len(video_bytes) > 15 * 1024 * 1024:
+            return
 
         # 2. Telegram Bot sendVideo
         if self.telegram_enabled and self.telegram_token and self.telegram_chat_id:
@@ -318,13 +334,17 @@ class NotificationDispatcher:
         value = to_header_safe(str(value)).replace("\r", " ").replace("\n", " ").strip()
         return value[:512] or fallback
 
-    def _publish_ntfy(self, title, message, tags, attachment=None, filename=None, timeout=10, priority="high"):
+    def _publish_ntfy(self, title, message, tags, attachment=None, filename=None, timeout=10, priority="high", video_url=None):
         from urllib.parse import quote
         topic = self.ntfy_topic
         if not topic:
             raise ValueError("Set the ntfy topic subscribed on your phone.")
         url = self.ntfy_server + "/" + quote(topic, safe="")
         headers = {"Title": self._ntfy_header(title), "Priority": priority, "Tags": tags}
+        if video_url:
+            headers["Click"] = video_url
+            headers["Attach"] = video_url
+            headers["Actions"] = json.dumps([{"action": "view", "label": "Open video", "url": video_url}])
         body = str(message).encode("utf-8")
         method = "POST"
         if attachment:
@@ -332,6 +352,7 @@ class NotificationDispatcher:
             clean_name = re.sub(r"[^A-Za-z0-9._-]", "_", str(filename or "attachment"))[-160:]
             headers["Filename"] = clean_name or "attachment"
             headers["Message"] = self._ntfy_header(message)
+            headers["Content-Type"] = "video/mp4" if clean_name.lower().endswith(".mp4") else "application/octet-stream"
             body = attachment
             method = "PUT"
         else:
@@ -347,6 +368,7 @@ class NotificationDispatcher:
             raise ValueError("ntfy returned an invalid response instead of accepting the message.") from None
         if not isinstance(accepted, dict) or accepted.get("event") != "message" or not accepted.get("id"):
             raise ValueError("ntfy did not acknowledge a published message.")
+        return accepted
 
     def _send_ntfy(self, cam_name, label, conf, desc, time_str, trigger_reason, snap_bytes, snap_filename=""):
         """Publish directly to ntfy; cloud-sync files are not a delivery dependency."""
@@ -451,7 +473,20 @@ class NotificationDispatcher:
         title = f"[Video Clip] {cam_name.split(' (')[0].strip()} - {label.title()}{conf_str}"
         message = desc or f"{label.title()} incident clip recorded at {time_str}"
         try:
-            self._publish_ntfy(title, message, "movie_camera,warning", video_bytes, filename, timeout=20)
+            # Upload quietly, then publish the returned attachment link with a
+            # real view action. No LAN address, port forwarding or cloud sync.
+            accepted = self._publish_ntfy(title, "Preparing video preview", "movie_camera", video_bytes, filename, timeout=30, priority="min")
+            from urllib.parse import urlsplit
+            attachment = accepted.get("attachment") or {}
+            video_url = attachment.get("url", "") if isinstance(attachment, dict) else ""
+            target, server = urlsplit(video_url), urlsplit(self.ntfy_server)
+            if (not video_url or target.scheme not in ("http", "https") or
+                    target.scheme != server.scheme or target.netloc != server.netloc or
+                    target.username or target.password or not target.path.startswith(server.path.rstrip("/") + "/file/") or
+                    any(ord(c) < 33 or ord(c) > 126 for c in video_url)):
+                raise ValueError("ntfy did not return a valid video attachment link.")
+            self._publish_ntfy(title, message + " — Open video to watch the preview (up to 60 seconds). Download before the server attachment expires.",
+                               "movie_camera,warning", video_url=video_url)
         except urllib.error.HTTPError as error:
             if error.code != 413:
                 raise

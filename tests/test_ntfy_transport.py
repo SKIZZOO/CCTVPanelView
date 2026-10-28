@@ -15,7 +15,7 @@ from core.network_tls import verified_tls_context
 
 
 class Response(io.BytesIO):
-    def __init__(self, data=b'{"id":"fixture-id","event":"message"}'):
+    def __init__(self, data=b'{"id":"fixture-id","event":"message","attachment":{"url":"https://ntfy.sh/file/fixture.mp4"}}'):
         super().__init__(data)
 
 
@@ -30,14 +30,42 @@ class NtfyTransportTests(unittest.TestCase):
              patch("builtins.open", side_effect=FileNotFoundError("optional sync database unavailable")):
             self.dispatcher._send_ntfy("Camera", "PERSON", .9, "Person detected", "12:00", "confirmed", b"jpeg")
             self.dispatcher._send_ntfy_video("Camera", "PERSON", .9, "Person detected", "12:00", b"mp4", "clip.mp4")
-        self.assertEqual(request.call_count, 2)
-        photo, clip = [call.args[0] for call in request.call_args_list]
+        self.assertEqual(request.call_count, 3)
+        photo, clip, watch = [call.args[0] for call in request.call_args_list]
         self.assertEqual([photo.get_method(), clip.get_method()], ["PUT", "PUT"])
         self.assertEqual([photo.data, clip.data], [b"jpeg", b"mp4"])
         self.assertEqual(photo.get_header("Priority"), "urgent")
         self.assertEqual(clip.get_header("Filename"), "clip.mp4")
         self.assertIsNone(clip.get_header("Actions"))
         self.assertIsNone(clip.get_header("Click"))
+        self.assertEqual(clip.get_header("Content-type"), "video/mp4")
+        self.assertEqual(clip.get_header("Priority"), "min")
+        self.assertEqual(watch.get_header("Click"), "https://ntfy.sh/file/fixture.mp4")
+        self.assertEqual(json.loads(watch.get_header("Actions"))[0]["label"], "Open video")
+
+    def test_untrusted_or_missing_attachment_links_never_become_actions(self):
+        for url in ("", "https://evil.example/file/video.mp4", "javascript:alert(1)",
+                    "https://ntfy.sh/other-topic", "https://ntfy.sh/file/clip.mp4\r\nInjected: yes"):
+            body = json.dumps({"id": "fixture", "event": "message", "attachment": {"url": url}}).encode()
+            with patch("core.notification_dispatcher.urllib.request.urlopen", return_value=Response(body)) as request:
+                with self.assertRaises(ValueError):
+                    self.dispatcher._send_ntfy_video("Camera", "PERSON", .9, "Person", "12:00", b"mp4", "clip.mp4")
+            self.assertEqual(request.call_count, 1)
+
+    def test_large_original_is_prepared_instead_of_silently_skipped(self):
+        import tempfile
+        from pathlib import Path
+        self.dispatcher.settings.update(phone_notifications_enabled=True, phone_notify_video=True)
+        with tempfile.TemporaryDirectory() as temp:
+            clip = Path(temp) / "clip.mp4"
+            with clip.open("wb") as stream: stream.truncate(20 * 1024 * 1024)
+            entry = {"label": "PERSON", "video_path": str(clip)}
+            with patch("core.notification_dispatcher.prepare_phone_video", return_value=b"preview") as prepare, \
+                 patch.object(self.dispatcher, "_send_ntfy_video") as send:
+                self.dispatcher._dispatch_video_worker(entry)
+            prepare.assert_called_once_with(str(clip))
+            self.assertEqual(send.call_args.args[-2:], (b"preview", "incident-preview.mp4"))
+            self.assertEqual(clip.stat().st_size, 20 * 1024 * 1024)
 
     def test_missing_snapshot_is_sent_as_utf8_text_with_safe_headers(self):
         with patch("core.notification_dispatcher.urllib.request.urlopen", return_value=Response()) as request:

@@ -8,7 +8,7 @@
 
 A desktop viewer for RTSP/ONVIF IP cameras, with motion alerts, optional on-device object detection, local recording, and a browser interface for phones and tablets.
 
-[**Download for Windows**](https://github.com/SKIZZOO/CCTVPanelView/releases/latest) · [Features](#what-you-can-do) · [Quick start](#install-the-windows-release) · [Security](#security-and-privacy) · [2.3.1 ntfy delivery fix](docs/RELEASE-2.3.1.md)
+[**Download for Windows**](https://github.com/SKIZZOO/CCTVPanelView/releases/latest) · [Features](#what-you-can-do) · [Quick start](#install-the-windows-release) · [Security](#security-and-privacy) · [2.3.2 playable video alerts](docs/RELEASE-2.3.2.md)
 
 ![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4)
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776ab)
@@ -216,3 +216,11 @@ The build produces the app, uninstaller, and setup executable in `dist/` and run
 ## License
 
 [MIT](LICENSE)
+
+## Watch incident videos from ntfy
+
+Enable **Settings → Phone notifications → Send Video Clip to Phone** and subscribe to your private topic in ntfy. After an eligible incident finishes recording, CCTVPanelView uploads a compact H.264/AAC MP4 preview and sends an **Open video** action. Tap it to open the preview in your phone browser/player; ntfy also offers the file attachment for download. The quiet upload entry may appear before the playable alert.
+
+Previews include up to the first 60 seconds, use at most 640×360 at 12 fps, and stay below 1.8 MB. Full recordings stay untouched on your PC. Existing category preferences (for example, people only) apply to clips too. Delivery waits until recording finishes. Failed preparation/uploads produce an explanation instead of silently dropping large clips.
+
+The default ntfy.sh free service currently documents a 2 MB attachment limit, a 20 MB attachment storage quota per visitor, and temporary attachments (normally 3 hours). Download clips you want to retain. Server quota/rate limits can still prevent delivery. [ntfy attachment limits](https://docs.ntfy.sh/publish/#limitations).

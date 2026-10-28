@@ -62,7 +62,8 @@ class NotificationPolicyTests(unittest.TestCase):
             video.write_bytes(b"x" * 3000)
             with patch.object(dispatcher, "_send_ntfy") as ntfy, patch.object(dispatcher, "_send_telegram") as telegram, \
                  patch.object(dispatcher, "_send_discord") as discord, patch.object(dispatcher, "_send_ntfy_video") as ntfy_video, \
-                 patch.object(dispatcher, "_send_telegram_video") as telegram_video, patch.object(dispatcher, "_send_discord_video") as discord_video:
+                 patch.object(dispatcher, "_send_telegram_video") as telegram_video, patch.object(dispatcher, "_send_discord_video") as discord_video, \
+                 patch("core.notification_dispatcher.prepare_phone_video", return_value=b"preview"):
                 for label in ("CAR", "DOG", "MOTION", "UNKNOWN", "PERSON"):
                     entry = dict(label=label, video_path=str(video), description="Motion from person camera")
                     dispatcher.send_alert(entry)
