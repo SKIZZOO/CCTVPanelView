@@ -132,9 +132,9 @@ def global_thread_excepthook(args):
     print(f"[FATAL TRAP PREVENTED - THREAD {th_name}]:\n{trace_str}", file=sys.stderr)
 
 
-from PyQt6.QtWidgets import QApplication, QSplashScreen
+from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QIcon, QFont, QPixmap, QColor, QPainter
+from PyQt6.QtGui import QFont
 
 
 
@@ -189,6 +189,9 @@ def check_single_instance() -> bool:
 
 
 def main():
+    if "--startup-splash" in sys.argv:
+        from core.startup_animation import run_startup_animation
+        raise SystemExit(run_startup_animation(sys.argv, BUNDLE_DIR))
     if "--camera-diagnostics" in sys.argv:
         from core.diagnostics import run_camera_diagnostics
         raise SystemExit(run_camera_diagnostics(sys.argv))
@@ -223,14 +226,8 @@ def main():
     if hasattr(Qt.ApplicationAttribute, 'AA_UseHighDpiPixmaps'):
         QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps, True)
 
-    # Set Windows AppUserModelID so Windows Taskbar pins and displays the custom app icon
-    if sys.platform == "win32":
-        try:
-            import ctypes
-            myappid = "cctvpanelview.studio.ai.cctv.v1"
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
-        except Exception:
-            pass
+    from core.windows_identity import set_process_app_id
+    set_process_app_id()
 
     app = QApplication(sys.argv)
     # Ensure closing the main window quits the application cleanly
@@ -238,33 +235,26 @@ def main():
     app.setApplicationName("CCTVPanelView")
     app.setOrganizationName("CCTVPanelView")
 
-    # Load high-resolution application icon
-    icon_ico = os.path.join(BASE_DIR, "assets", "cctv_logo.ico")
-    if not os.path.exists(icon_ico):
-        icon_ico = os.path.join(BASE_DIR, "assets", "app_icon.ico")
-    icon_png = os.path.join(BASE_DIR, "assets", "app_icon.png")
-    icon_path = icon_ico if os.path.exists(icon_ico) else icon_png
-    if os.path.exists(icon_path):
-        app_icon = QIcon(icon_path)
-        app.setWindowIcon(app_icon)
-    else:
-        app_icon = None
+    from core.startup_animation import application_icon, StartupAnimation
+    app_icon = application_icon(BUNDLE_DIR)
+    app.setWindowIcon(app_icon)
 
     # Set default clean system font
     font = QFont("Segoe UI", 10)
     app.setFont(font)
 
-    # Paint a lightweight, static loading view before importing/building the
-    # workstation. No animation or artificial two-second delay on the GUI thread.
-    pixmap = QPixmap(340, 130)
-    pixmap.fill(QColor("#0f172a"))
-    painter = QPainter(pixmap)
-    painter.setPen(QColor("#e2e8f0")); painter.setFont(QFont("Segoe UI", 13))
-    painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "Starting CCTVPanelView…")
-    painter.end()
-    splash = QSplashScreen(pixmap)
-    splash.show()
-    app.processEvents()
+    # The companion owns its own Qt event loop, so imports and construction
+    # cannot freeze its animation. It exits as soon as the window is ready.
+    try:
+        splash = StartupAnimation(EXE_DIR)
+    except OSError:
+        # Startup still succeeds if the OS prevents creating a helper process.
+        from ui.components.splash_screen import CyberneticSplashScreen
+        splash = CyberneticSplashScreen(wait_for_ready=True)
+        splash.setWindowIcon(app_icon)
+        splash.show()
+        splash.finish = lambda window: splash.complete()
+        app.processEvents()
 
     # Check if first-run setup or requested via flags
     from core.device_manager import DeviceManager
@@ -287,7 +277,6 @@ def main():
             sys.exit(0)
 
     splash.show()
-    app.processEvents()
     from ui.main_window import MainWindow
     window = MainWindow()
     if app_icon:

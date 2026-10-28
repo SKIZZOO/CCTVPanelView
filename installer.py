@@ -276,73 +276,14 @@ class InstallerDeploymentWorker(QThread):
             main_exe = os.path.join(self.target_dir, "CCTVPanelView.exe")
             target_to_launch = main_exe
 
-            icon_file = os.path.join(self.target_dir, "assets", "cctv_logo.ico")
-            if not os.path.exists(icon_file):
-                icon_file = os.path.join(self.target_dir, "assets", "app_icon.ico")
+            from core.windows_identity import create_shortcut, restore_legacy_icons
+            restore_legacy_icons(self.target_dir)
+            # The executable owns a permanent embedded icon; _internal assets
+            # are implementation details and must not be shortcut icon paths.
+            icon_file = main_exe
 
-            def create_windows_shortcut(target_path: str, shortcut_dest: str, icon_loc: str, desc: str):
-                # 1. Native completely silent WScript execution (wscript.exe is a GUI subsystem binary - NO console window)
-                try:
-                    import tempfile
-                    vbs_sc = (
-                        'Set ws = CreateObject("WScript.Shell")\r\n'
-                        f'Set s = ws.CreateShortcut("{shortcut_dest}")\r\n'
-                        f's.TargetPath = "{target_path}"\r\n'
-                        f's.WorkingDirectory = "{self.target_dir}"\r\n'
-                        f's.IconLocation = "{icon_loc},0"\r\n'
-                        f's.Description = "{desc}"\r\n'
-                        's.Save\r\n'
-                    )
-                    vbs_tmp = os.path.join(tempfile.gettempdir(), f"cctv_sc_{os.getpid()}_{hash(shortcut_dest) & 0xffffff}.vbs")
-                    with open(vbs_tmp, "w", encoding="utf-8") as vf:
-                        vf.write(vbs_sc)
-                    
-                    startupinfo = subprocess.STARTUPINFO()
-                    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                    startupinfo.wShowWindow = subprocess.SW_HIDE
-                    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
-
-                    res = subprocess.run(
-                        ["wscript.exe", "//B", "//Nologo", vbs_tmp],
-                        startupinfo=startupinfo,
-                        creationflags=creationflags,
-                        timeout=5.0
-                    )
-                    try:
-                        if os.path.exists(vbs_tmp):
-                            os.remove(vbs_tmp)
-                    except Exception:
-                        pass
-                    if res.returncode == 0 and os.path.exists(shortcut_dest):
-                        return
-                except Exception:
-                    pass
-
-                # 2. Silent PowerShell fallback with CREATE_NO_WINDOW and hidden window (zero flashing)
-                try:
-                    ps_script = (
-                        f'$ws = New-Object -ComObject WScript.Shell; '
-                        f'$s = $ws.CreateShortcut("{shortcut_dest}"); '
-                        f'$s.TargetPath = "{target_path}"; '
-                        f'$s.WorkingDirectory = "{self.target_dir}"; '
-                        f'$s.IconLocation = "{icon_loc},0"; '
-                        f'$s.Description = "{desc}"; '
-                        f'$s.Save()'
-                    )
-                    startupinfo = subprocess.STARTUPINFO()
-                    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                    startupinfo.wShowWindow = subprocess.SW_HIDE
-                    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
-                    subprocess.run(
-                        ["powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", ps_script],
-                        capture_output=True,
-                        text=True,
-                        startupinfo=startupinfo,
-                        creationflags=creationflags,
-                        timeout=8.0
-                    )
-                except Exception:
-                    pass
+            def create_windows_shortcut(target_path, shortcut_dest, icon_loc, desc):
+                create_shortcut(target_path, shortcut_dest, self.target_dir, desc)
 
             if self.create_desktop_shortcut:
                 desktop_dir = os.path.expanduser("~/Desktop")
@@ -378,7 +319,7 @@ class InstallerDeploymentWorker(QThread):
                         winreg.SetValueEx(k, "UninstallString", 0, winreg.REG_SZ, f'"{uninst_exe}"')
                     else:
                         winreg.SetValueEx(k, "UninstallString", 0, winreg.REG_SZ, f'python "{os.path.join(self.target_dir, "uninstaller.py")}"')
-                    winreg.SetValueEx(k, "DisplayIcon", 0, winreg.REG_SZ, f'"{icon_file},0"')
+                    winreg.SetValueEx(k, "DisplayIcon", 0, winreg.REG_SZ, f'"{icon_file}",0')
                     winreg.SetValueEx(k, "NoModify", 0, winreg.REG_DWORD, 1)
                     winreg.SetValueEx(k, "NoRepair", 0, winreg.REG_DWORD, 1)
             except Exception as e:
@@ -1119,7 +1060,15 @@ def main():
                     result = json.load(file)
                 result["passed"] = result.get("passed", False) and completed.returncode == 0
                 result["installer_payload_deployed"] = True
+                from core.windows_identity import create_shortcut, restore_legacy_icons
+                restore_legacy_icons(temp)
+                shortcut = os.path.join(temp, "diagnostic-shortcut.lnk")
+                create_shortcut(os.path.join(temp, "CCTVPanelView.exe"), shortcut, temp, "CCTVPanelView")
+                result["native_shortcut_created"] = os.path.isfile(shortcut)
+                result["legacy_pinned_icon_restored"] = os.path.isfile(os.path.join(temp, "assets", "cctv_logo.ico"))
+                result["passed"] = result["passed"] and result["native_shortcut_created"] and result["legacy_pinned_icon_restored"]
         except Exception as error:
+            result["passed"] = False
             result["error"] = str(error)
         if report_path:
             with open(report_path, "w", encoding="utf-8") as file:

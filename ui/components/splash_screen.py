@@ -49,18 +49,19 @@ class CyberneticSplashScreen(QWidget):
     """
     finished = pyqtSignal()
 
-    def __init__(self, duration_sec: float = 2.2, parent=None):
+    def __init__(self, duration_sec: float = 2.2, parent=None, wait_for_ready=False):
         super().__init__(parent)
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint |
-            Qt.WindowType.SplashScreen
+            Qt.WindowType.Window
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
 
         self.setFixedSize(280, 280)
         self._center_on_screen()
 
+        self.wait_for_ready = wait_for_ready
         self.duration_sec = duration_sec
         self.elapsed = 0.0
         self.is_fading_out = False
@@ -84,7 +85,7 @@ class CyberneticSplashScreen(QWidget):
         dt = 0.016
         if not self.is_fading_out:
             self.elapsed += dt
-            if self.elapsed >= self.duration_sec:
+            if self.elapsed >= self.duration_sec and not self.wait_for_ready:
                 self.is_fading_out = True
         else:
             self.fade_opacity -= dt * 4.0  # ~250ms smooth fade out
@@ -96,6 +97,9 @@ class CyberneticSplashScreen(QWidget):
                 return
 
         self.update()
+
+    def complete(self):
+        self.is_fading_out = True
 
     def keyPressEvent(self, event):
         # Allow instant skip via Esc or Space or Enter

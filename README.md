@@ -8,7 +8,7 @@
 
 A desktop viewer for RTSP/ONVIF IP cameras, with motion alerts, optional on-device object detection, local recording, and a browser interface for phones and tablets.
 
-[**Download for Windows**](https://github.com/SKIZZOO/CCTVPanelView/releases/latest) Â· [Features](#what-you-can-do) Â· [Quick start](#install-the-windows-release) Â· [Security](#security-and-privacy) Â· [2.3.3 native ntfy video attachments](docs/RELEASE-2.3.3.md)
+[**Download for Windows**](https://github.com/SKIZZOO/CCTVPanelView/releases/latest) Â· [Features](#what-you-can-do) Â· [Quick start](#install-the-windows-release) Â· [Security](#security-and-privacy) Â· [2.3.4 animated startup and taskbar icons](docs/RELEASE-2.3.4.md)
 
 ![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4)
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776ab)
@@ -236,3 +236,9 @@ Completed recordings already inside the selected folder are left in place. Other
 Automatic link detection requires Drive for desktop to expose a real cloud folder ID. Normal local folders, unsupported mirrored folders, unavailable drives and folders awaiting their first sync show a clear error instead of a guessed link. The app does not scrape Drive's database, read Google credentials, change sharing or install/configure Drive for desktop. This local metadata behavior may vary across Drive versions.
 
 Small MP4 attachment mode remains available; outgoing category filters apply to both modes. Google Drive playback opens in its app/browser, rather than ntfy's native attachment preview.
+
+## Animated startup and Windows taskbar icons
+
+The animated camera intro runs in its own lightweight process while the workstation loads, so application imports and window construction do not freeze the animation. It hands over as soon as the main window is ready, without a forced startup delay, and closes automatically if the main process exits. Click or press Escape to skip the intro.
+
+Windows shortcuts use the executable's embedded icon and the same app identity as the running app. Upgrades restore legacy icon paths used by older pinned shortcuts. The installer creates native Windows shortcuts without temporary script launchers.
