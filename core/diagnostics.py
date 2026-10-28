@@ -100,7 +100,7 @@ def run_self_test(argv):
             notifier = NotificationDispatcher({"ntfy_enabled": True, "ntfy_topic": "offline-fixture"})
             notifier._send_ntfy("Fixture", "PERSON", .9, "Offline fixture", "12:00", "fixture", b"jpeg-fixture")
             notifier._send_ntfy_video("Fixture", "PERSON", .9, "Offline fixture", "12:00", b"video-fixture", "fixture.mp4")
-            checks["ntfy_photo_video_requests"] = [request.get_method() for request in requests] == ["PUT", "PUT", "POST"]
+            checks["ntfy_photo_video_requests"] = [request.get_method() for request in requests] == ["PUT", "PUT"]
         finally:
             notification_module.urllib.request.urlopen = original_open
         with tempfile.TemporaryDirectory() as temp:

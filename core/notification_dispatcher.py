@@ -67,6 +67,20 @@ def generate_secret_ntfy_topic() -> str:
     return f"cctv_pv_{secrets.token_hex(12)}"
 
 
+def private_drive_folder_url(value):
+    """Only accept actual HTTPS Google Drive folder links, never redirect URLs."""
+    import re
+    from urllib.parse import urlsplit, parse_qsl
+    value = str(value or "").strip()
+    parsed = urlsplit(value)
+    if (parsed.scheme != "https" or parsed.netloc != "drive.google.com" or
+            not re.fullmatch(r"/drive/(?:u/\d+/)?folders/[A-Za-z0-9_-]+/?", parsed.path) or
+            any(ord(c) < 33 or ord(c) > 126 for c in value) or parsed.fragment or
+            any(k not in ("usp", "resourcekey") for k, _ in parse_qsl(parsed.query))):
+        raise ValueError("Set the private Google Drive recordings folder link in Phone notifications settings.")
+    return value
+
+
 def to_header_safe(text: str) -> str:
     """Transliterates Romanian/Unicode characters to clean ASCII for HTTP headers."""
     table = {
@@ -278,17 +292,20 @@ class NotificationDispatcher:
         # 1. ntfy.sh Video Push
         if self.ntfy_enabled and self.ntfy_topic:
             try:
-                with _phone_video_slots:
-                    if not self.is_phone_enabled or not self.notify_video_enabled or not self.should_notify_label(label, alert_entry):
-                        return
-                    preview = prepare_phone_video(video_path)
-                if self.is_phone_enabled and self.notify_video_enabled and self.should_notify_label(label, alert_entry):
-                    self._send_ntfy_video(cam_name, label, conf, desc, time_str, preview, "incident-preview.mp4")
+                if self.settings.get("ntfy_video_delivery", "preview") == "google_drive_folder":
+                    self._send_ntfy_drive_folder(cam_name, label, time_str, filename, file_size)
+                else:
+                    with _phone_video_slots:
+                        if not self.is_phone_enabled or not self.notify_video_enabled or not self.should_notify_label(label, alert_entry):
+                            return
+                        preview = prepare_phone_video(video_path)
+                    if self.is_phone_enabled and self.notify_video_enabled and self.should_notify_label(label, alert_entry):
+                        self._send_ntfy_video(cam_name, label, conf, desc, time_str, preview, "incident-preview.mp4")
             except Exception as e:
                 print("[Notifier] ntfy video push error: " + self.ntfy_error_message(e))
                 try:
                     if self.is_phone_enabled and self.notify_video_enabled and self.should_notify_label(label, alert_entry):
-                        self._publish_ntfy("Video preview unavailable", "The recording is saved on your PC. " + self.ntfy_error_message(e), "movie_camera,warning")
+                        self._publish_ntfy("Video delivery unavailable", "The recording is saved on your PC. " + self.ntfy_error_message(e), "movie_camera,warning")
                 except Exception as fallback_error:
                     print("[Notifier] ntfy fallback error: " + self.ntfy_error_message(fallback_error))
 
@@ -334,17 +351,17 @@ class NotificationDispatcher:
         value = to_header_safe(str(value)).replace("\r", " ").replace("\n", " ").strip()
         return value[:512] or fallback
 
-    def _publish_ntfy(self, title, message, tags, attachment=None, filename=None, timeout=10, priority="high", video_url=None):
+    def _publish_ntfy(self, title, message, tags, attachment=None, filename=None, timeout=10, priority="high", drive_folder_url=None):
         from urllib.parse import quote
         topic = self.ntfy_topic
         if not topic:
             raise ValueError("Set the ntfy topic subscribed on your phone.")
         url = self.ntfy_server + "/" + quote(topic, safe="")
         headers = {"Title": self._ntfy_header(title), "Priority": priority, "Tags": tags}
-        if video_url:
-            headers["Click"] = video_url
-            headers["Attach"] = video_url
-            headers["Actions"] = json.dumps([{"action": "view", "label": "Open video", "url": video_url}])
+        if drive_folder_url:
+            link = private_drive_folder_url(drive_folder_url)
+            headers["Click"] = link
+            headers["Actions"] = json.dumps([{"action": "view", "label": "Open Google Drive folder", "url": link}])
         body = str(message).encode("utf-8")
         method = "POST"
         if attachment:
@@ -369,6 +386,15 @@ class NotificationDispatcher:
         if not isinstance(accepted, dict) or accepted.get("event") != "message" or not accepted.get("id"):
             raise ValueError("ntfy did not acknowledge a published message.")
         return accepted
+
+    def _send_ntfy_drive_folder(self, cam_name, label, time_str, filename, file_size):
+        link = private_drive_folder_url(self.settings.get("ntfy_google_drive_folder_url"))
+        message = (f"{label.title()} recorded at {time_str}. File: {filename} "
+                   f"({file_size / 1_000_000:.1f} MB). Open the private Drive folder and select this file. "
+                   "Wait for Google Drive for desktop to finish syncing and Drive to process the video. "
+                   "Sign in with an account that can access the folder. This alert does not confirm cloud upload.")
+        return self._publish_ntfy(f"[Full recording] {cam_name}", message, "movie_camera,warning",
+                                  drive_folder_url=link)
 
     def _send_ntfy(self, cam_name, label, conf, desc, time_str, trigger_reason, snap_bytes, snap_filename=""):
         """Publish directly to ntfy; cloud-sync files are not a delivery dependency."""
@@ -473,20 +499,14 @@ class NotificationDispatcher:
         title = f"[Video Clip] {cam_name.split(' (')[0].strip()} - {label.title()}{conf_str}"
         message = desc or f"{label.title()} incident clip recorded at {time_str}"
         try:
-            # Upload quietly, then publish the returned attachment link with a
-            # real view action. No LAN address, port forwarding or cloud sync.
-            accepted = self._publish_ntfy(title, "Preparing video preview", "movie_camera", video_bytes, filename, timeout=30, priority="min")
-            from urllib.parse import urlsplit
-            attachment = accepted.get("attachment") or {}
-            video_url = attachment.get("url", "") if isinstance(attachment, dict) else ""
-            target, server = urlsplit(video_url), urlsplit(self.ntfy_server)
-            if (not video_url or target.scheme not in ("http", "https") or
-                    target.scheme != server.scheme or target.netloc != server.netloc or
-                    target.username or target.password or not target.path.startswith(server.path.rstrip("/") + "/file/") or
-                    any(ord(c) < 33 or ord(c) > 126 for c in video_url)):
-                raise ValueError("ntfy did not return a valid video attachment link.")
-            self._publish_ntfy(title, message + " — Open video to watch the preview (up to 60 seconds). Download before the server attachment expires.",
-                               "movie_camera,warning", video_url=video_url)
+            # One native attachment preserves ntfy's MIME/size/expiry metadata
+            # and lets iOS download, retain and open it with Quick Look.
+            if not video_bytes:
+                raise ValueError("Video preview is empty.")
+            return self._publish_ntfy(
+                title, message + " — Tap the MP4 attachment to download, then tap again to play. "
+                "Download promptly: ntfy normally removes server copies after 3 hours. Full recording is on your PC.",
+                "movie_camera,warning", video_bytes, "incident-preview.mp4", timeout=30, priority="high")
         except urllib.error.HTTPError as error:
             if error.code != 413:
                 raise

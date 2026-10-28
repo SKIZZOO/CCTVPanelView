@@ -8,7 +8,7 @@
 
 A desktop viewer for RTSP/ONVIF IP cameras, with motion alerts, optional on-device object detection, local recording, and a browser interface for phones and tablets.
 
-[**Download for Windows**](https://github.com/SKIZZOO/CCTVPanelView/releases/latest) · [Features](#what-you-can-do) · [Quick start](#install-the-windows-release) · [Security](#security-and-privacy) · [2.3.2 playable video alerts](docs/RELEASE-2.3.2.md)
+[**Download for Windows**](https://github.com/SKIZZOO/CCTVPanelView/releases/latest) Â· [Features](#what-you-can-do) Â· [Quick start](#install-the-windows-release) Â· [Security](#security-and-privacy) Â· [2.3.3 native ntfy video attachments](docs/RELEASE-2.3.3.md)
 
 ![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4)
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776ab)
@@ -49,7 +49,7 @@ Settings is grouped into **General & Layout**, **Alerts & Sounds**, **Detection*
 
 In the incident feed, choose **Motion**, **Person**, **Animal**, or **Car / vehicle** to filter existing and incoming alerts. The choices persist across restarts. Display filters do not stop detection, recording, or separately configured notifications.
 
-To send **only people notifications**, open **Settings → Alerts & Sounds → Send notifications for** and click **People only**. Enable Mobile Push Alerts and configure your chosen service. The category switches apply to both photos and clips sent through ntfy, Telegram, and Discord. Turning every category off sends none. Choices survive saving, restarting, and disarming/rearming.
+To send **only people notifications**, open **Settings â†’ Alerts & Sounds â†’ Send notifications for** and click **People only**. Enable Mobile Push Alerts and configure your chosen service. The category switches apply to both photos and clips sent through ntfy, Telegram, and Discord. Turning every category off sends none. Choices survive saving, restarting, and disarming/rearming.
 
 Under the ntfy topic, **Send text-only test** checks the currently entered topic without sending camera data. The result appears in Settings. Snapshot and video attachments are uploaded directly to ntfy; Google Drive synchronization is not required. If the server rejects an attachment as too large, the app sends a text alert instead. Server acceptance is checked using ntfy's message acknowledgement; HTTP errors and invalid proxy responses are reported as failures.
 
@@ -57,13 +57,13 @@ The Windows package includes certifi's public CA bundle so HTTPS delivery does n
 
 <img src="docs/screenshots/settings_ntfy_test.png" width="1100" alt="ntfy topic settings and a background text-only delivery test">
 
-**Detection → Create incident alerts** controls which local incidents are created. Keep AI person detection and People incidents enabled to receive person notifications. These controls are independent of outgoing notification categories and the sidebar's display filters.
+**Detection â†’ Create incident alerts** controls which local incidents are created. Keep AI person detection and People incidents enabled to receive person notifications. These controls are independent of outgoing notification categories and the sidebar's display filters.
 
 <img src="docs/screenshots/settings_outgoing_notifications.png" width="1100" alt="People-only outgoing notification settings, separate from local incident controls">
 
 Frigate integration is deferred. See the [Frigate security and integration review](docs/FRIGATE-REVIEW-2026-10-27.md) before deploying a separate server; CCTVPanelView does not install or connect to Frigate in this release.
 
-Siren previews and actual alerts use the same 0–100% volume setting. Choose a built-in profile or a custom PCM WAV file; 0% mutes playback. The Windows default playback device is used.
+Siren previews and actual alerts use the same 0â€“100% volume setting. Choose a built-in profile or a custom PCM WAV file; 0% mutes playback. The Windows default playback device is used.
 
 <table>
 <tr>
@@ -112,7 +112,7 @@ Setup detects the registered installation folder and backs up `cameras_config.js
 
 ### In-app updates
 
-Open **Settings → General & layout → Application updates → Check for updates**. Automatic checks run in the background 30 seconds after startup and every six hours; turn them off in the same section. The updater checks the official GitHub repository's latest stable release, compares numeric versions and offers **Download verified update**, followed by **Install and restart**.
+Open **Settings â†’ General & layout â†’ Application updates â†’ Check for updates**. Automatic checks run in the background 30 seconds after startup and every six hours; turn them off in the same section. The updater checks the official GitHub repository's latest stable release, compares numeric versions and offers **Download verified update**, followed by **Install and restart**.
 
 Downloads must use the expected repository/tag/installer name and HTTPS GitHub hosts, and match the published size and SHA-256 digest. The installer is checked again before launch. The app saves and backs up its current layout, then closes safely; Setup waits for it to exit and opens in the existing installation folder. Finish Setup to restart. No batch files are used. Installers are not Authenticode-signed: checksum verification checks agreement with the GitHub release, not an independent publisher signature. Source runs can check and download updates but require manual installer launch.
 
@@ -139,13 +139,13 @@ If environment activation is blocked, invoke `.venv\Scripts\python.exe` directly
 
 ## Add a camera
 
-At first launch, open the setup flow or choose **Add Camera**. Enter the camera’s address, RTSP/ONVIF ports, credentials, and stream profile or URL. Test the connection and save it. Camera stream paths and ONVIF features vary across manufacturers, so consult your camera’s documentation if the provided profile does not work.
+At first launch, open the setup flow or choose **Add Camera**. Enter the cameraâ€™s address, RTSP/ONVIF ports, credentials, and stream profile or URL. Test the connection and save it. Camera stream paths and ONVIF features vary across manufacturers, so consult your cameraâ€™s documentation if the provided profile does not work.
 
 Select a 1, 2, 4, or 9 tile layout, then assign configured cameras to tiles. Recording, storage, motion detection, AI options, and notifications are managed from Settings.
 
 ## Use the mobile web viewer
 
-In the desktop app, select **More → Mobile access**, then copy or scan the complete access link. Open it on a phone or tablet on the same trusted network. The link grants access to the web session, so treat it like a password. It and its browser sessions expire when the server restarts.
+In the desktop app, select **More â†’ Mobile access**, then copy or scan the complete access link. Open it on a phone or tablet on the same trusted network. The link grants access to the web session, so treat it like a password. It and its browser sessions expire when the server restarts.
 
 The web server uses HTTP. Keep it on a trusted LAN or use a trusted VPN. For access over an untrusted network, place it behind an HTTPS reverse proxy and preserve the original Host header. Do not expose the plain HTTP server directly to the public internet. Headless mode prints its private link to its local console; protect the console and logs.
 
@@ -217,10 +217,20 @@ The build produces the app, uninstaller, and setup executable in `dist/` and run
 
 [MIT](LICENSE)
 
-## Watch incident videos from ntfy
+## Watch incident videos in ntfy
 
-Enable **Settings → Phone notifications → Send Video Clip to Phone** and subscribe to your private topic in ntfy. After an eligible incident finishes recording, CCTVPanelView uploads a compact H.264/AAC MP4 preview and sends an **Open video** action. Tap it to open the preview in your phone browser/player; ntfy also offers the file attachment for download. The quiet upload entry may appear before the playable alert.
+Enable **Send Video Clip to Phone** in CCTVPanelView settings. After recording finishes, one high-priority notification carries the real MP4 attachment with its video type, size and expiry metadata. On iPhone, **tap the MP4 attachment to download it, then tap it again to play** in the native preview. Use the attachment menu to save/share a downloaded copy. The misleading second Open video notification from 2.3.2 is removed.
 
-Previews include up to the first 60 seconds, use at most 640×360 at 12 fps, and stay below 1.8 MB. Full recordings stay untouched on your PC. Existing category preferences (for example, people only) apply to clips too. Delivery waits until recording finishes. Failed preparation/uploads produce an explanation instead of silently dropping large clips.
+Previews include up to the first 60 seconds, use at most 640×360 at 12 fps, and stay below 850 KB. Full recordings stay untouched on your PC. Existing outgoing category preferences apply to clips too.
 
-The default ntfy.sh free service currently documents a 2 MB attachment limit, a 20 MB attachment storage quota per visitor, and temporary attachments (normally 3 hours). Download clips you want to retain. Server quota/rate limits can still prevent delivery. [ntfy attachment limits](https://docs.ntfy.sh/publish/#limitations).
+**Expired is not a codec error:** ntfy normally deletes server attachments after 3 hours. Old notifications cannot retrieve deleted files. Open/download new clips promptly and save important ones. On iPhone check ntfy Settings → Download attachments; choose a threshold covering the preview size (for example 1 MB). Auto-download behavior depends on the installed ntfy version and iOS background limits; opening ntfy promptly and manually downloading is the reliable fallback. CCTVPanelView cannot force an iPhone to download in the background or change ntfy's server retention.
+
+For longer server retention use a suitable ntfy plan or your own configured ntfy server; this app does not automatically subscribe, charge, or expose your local recordings. [ntfy attachments and limits](https://docs.ntfy.sh/publish/#attachments), [ntfy iOS releases](https://github.com/binwiederhier/ntfy/blob/main/docs/releases.md).
+
+### Full recordings, including 100 MB files, through Google Drive
+
+In **Settings → Phone notifications**, choose **Full recording: Google Drive folder** under **ntfy video delivery**, then enter the private recordings folder's Google Drive browser link. Keep Drive sharing **Restricted**. Under Storage, the recording directory must be inside your Google Drive for desktop synced folder.
+
+ntfy sends a small notification with **Open Google Drive folder**, the exact filename and its size. Open the folder using your Google account and select that file after Drive for desktop finishes syncing and Google finishes processing it. The full video is not compressed or uploaded to ntfy, so ntfy's attachment limit does not apply; your Drive quota, sync configuration and Drive playback limits still do. This opens the folder rather than selecting the exact video automatically. A notification confirms local recording only, never successful Drive synchronization. It does not install/configure Drive for desktop or change permissions. Drive playback occurs in the Google Drive app/browser, rather than ntfy's native attachment preview.
+
+Small MP4 attachment mode remains available. Existing outgoing category filters apply to both modes. No Drive password, OAuth token or public sharing is required for folder links.

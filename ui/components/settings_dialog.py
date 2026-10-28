@@ -932,7 +932,7 @@ class SettingsDialog(QDialog):
             self.sidebar.takeItem(6)
         self.settings_search = QLineEdit()
         self.settings_search.setStyleSheet("QLineEdit { background: #111827; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px; padding: 8px 12px; min-height: 20px; }")
-        self.settings_search.setPlaceholderText("Find a setting: volume, camera, retention, detection…")
+        self.settings_search.setPlaceholderText("Find a setting: volume, camera, retention, detectionâ€¦")
         self.settings_search.textChanged.connect(self._search_settings)
         root_layout.insertWidget(1, self.settings_search)
         self.settings_search_feedback = QLabel("No matching settings. Try a shorter search.")
@@ -1067,7 +1067,7 @@ class SettingsDialog(QDialog):
         updates_card = SettingCard("Application updates", f"Installed version {APP_VERSION}. Check the official GitHub stable release and verify installer downloads.")
         self.sw_auto_updates = ToggleSwitch(checked=self.settings.get("auto_check_updates", True))
         updates_card.add_row(SettingRow("Automatically check for updates", "Checks in the background after startup and every six hours. Downloads and installation wait for your action.", self.sw_auto_updates))
-        self.btn_check_updates = QPushButton("Check for updates…")
+        self.btn_check_updates = QPushButton("Check for updatesâ€¦")
         self.btn_check_updates.clicked.connect(self.check_updates_requested.emit)
         updates_card.add_row(SettingRow("Download and install", "Save your layout and update the existing installation folder.", self.btn_check_updates))
         layout.addWidget(updates_card)
@@ -1175,7 +1175,22 @@ class SettingsDialog(QDialog):
         card_mobile.add_row(self.lbl_ntfy_test)
 
         self.sw_send_video = ToggleSwitch(checked=self.settings.get("phone_notify_video", self.settings.get("send_video_to_phone", True)))
-        card_mobile.add_row(SettingRow("Send Video Clip to Phone", "ntfy: compact MP4 preview with Open video; full recording stays on this PC", self.sw_send_video))
+        card_mobile.add_row(SettingRow("Send Video Clip to Phone", "Choose a small native MP4 or a private Google Drive folder link below. Full recordings stay unchanged.", self.sw_send_video))
+
+        self.cmb_ntfy_video_delivery = QComboBox()
+        self.cmb_ntfy_video_delivery.setFixedWidth(260)
+        self.cmb_ntfy_video_delivery.addItem("Small MP4 attachment (under 850 KB)", "preview")
+        self.cmb_ntfy_video_delivery.addItem("Full recording: Google Drive folder", "google_drive_folder")
+        selected_mode = self.cmb_ntfy_video_delivery.findData(self.settings.get("ntfy_video_delivery", "preview"))
+        self.cmb_ntfy_video_delivery.setCurrentIndex(max(0, selected_mode))
+        card_mobile.add_row(SettingRow("ntfy video delivery", "Drive mode supports full files such as 100 MB without uploading them to ntfy.", self.cmb_ntfy_video_delivery))
+        self.txt_ntfy_drive_folder = QLineEdit()
+        self.txt_ntfy_drive_folder.setFixedWidth(260)
+        self.txt_ntfy_drive_folder.setPlaceholderText("https://drive.google.com/drive/folders/...")
+        self.txt_ntfy_drive_folder.setText(self.settings.get("ntfy_google_drive_folder_url", ""))
+        self.txt_ntfy_drive_folder.setEnabled(self.cmb_ntfy_video_delivery.currentData() == "google_drive_folder")
+        self.cmb_ntfy_video_delivery.currentIndexChanged.connect(lambda: self.txt_ntfy_drive_folder.setEnabled(self.cmb_ntfy_video_delivery.currentData() == "google_drive_folder"))
+        card_mobile.add_row(SettingRow("Private Google Drive folder link", "Keep sharing Restricted. Set Storage recording folder inside Google Drive for desktop. The alert opens this folder; choose the named file after sync completes.", self.txt_ntfy_drive_folder))
 
         self.sw_telegram_enabled = ToggleSwitch(checked=self.settings.get("telegram_enabled", False))
         card_mobile.add_row(SettingRow("Enable Telegram Bot Alerts", "Send photos and clips directly to your Telegram chat or channel", self.sw_telegram_enabled))
@@ -1232,7 +1247,7 @@ class SettingsDialog(QDialog):
                     "ntfy_topic": self.txt_ntfy_topic.text().strip(),
                     "ntfy_server": self.settings.get("ntfy_server", "")}
         self.btn_ntfy_test.setEnabled(False)
-        self.lbl_ntfy_test.setText("Sending one text-only test in the background…")
+        self.lbl_ntfy_test.setText("Sending one text-only test in the backgroundâ€¦")
         def run():
             try:
                 ok, message = NotificationDispatcher(settings).send_test_notification("ntfy")
@@ -1543,7 +1558,7 @@ class SettingsDialog(QDialog):
         has_pwd = bool(str(cam.get("password", "")).strip())
         is_cfg = cam.get("configured") is not False and bool(cam.get("streams"))
         cfg_tag = "" if is_cfg else " [Needs Setup]"
-        return f"{name}  •  {lens_tag}{cfg_tag}"
+        return f"{name}  â€¢  {lens_tag}{cfg_tag}"
 
     def _update_camera_badges(self, cam: dict):
         if not cam or not hasattr(self, "badge_cam_lens"):
@@ -1943,7 +1958,7 @@ class SettingsDialog(QDialog):
         self.btn_test_conn.setText("Test Connection")
         if (self.txt_cam_url1.text().strip() != getattr(self, "_tested_url", "") or
                 self.cmb_active_cam.currentData() != getattr(self, "_tested_camera_id", None)):
-            self.lbl_test_badge.setText("Settings changed — test again")
+            self.lbl_test_badge.setText("Settings changed â€” test again")
             return
         if success:
             self.lbl_test_badge.setText("Online / Verified")
@@ -2271,7 +2286,7 @@ class SettingsDialog(QDialog):
         self.txt_custom_sound = QLineEdit(self.settings.get("custom_sound_path", ""))
         self.txt_custom_sound.setPlaceholderText("Uncompressed PCM WAV file")
         custom_layout.addWidget(self.txt_custom_sound)
-        browse_sound = QPushButton("Browse…")
+        browse_sound = QPushButton("Browseâ€¦")
         browse_sound.clicked.connect(self._browse_sound)
         custom_layout.addWidget(browse_sound)
         card_snd.add_row(SettingRow("Custom sound file", "Choose Custom WAV File above to use this file", custom_row))
@@ -2300,7 +2315,7 @@ class SettingsDialog(QDialog):
             self.cmb_sound_profile.setCurrentIndex(self.cmb_sound_profile.findData(SoundProfile.CUSTOM))
 
     def _sound_preview_result(self):
-        self.sound_feedback.setText(self.sound_manager.last_error or "Preview complete — output uses the Windows default playback device.")
+        self.sound_feedback.setText(self.sound_manager.last_error or "Preview complete â€” output uses the Windows default playback device.")
 
     def _test_sound(self):
         if self.sound_manager:
@@ -2311,7 +2326,7 @@ class SettingsDialog(QDialog):
                 self.sound_feedback.setText("Choose an existing PCM WAV file first.")
                 return
             self.sound_manager.play_test_tone(profile, volume, custom_path=custom)
-            self.sound_feedback.setText("Muted" if volume == 0 else f"Playing preview at {volume}%…")
+            self.sound_feedback.setText("Muted" if volume == 0 else f"Playing preview at {volume}%â€¦")
             self._preview_timer.start(1200)
 
     # -------------------------------------------------------------
@@ -2396,6 +2411,8 @@ class SettingsDialog(QDialog):
             "notify_motion": self.sw_notify_motion.isChecked() if hasattr(self, "sw_notify_motion") else False,
             "ntfy_enabled": self.sw_ntfy_enabled.isChecked() if hasattr(self, "sw_ntfy_enabled") else False,
             "ntfy_topic": self.txt_ntfy_topic.text().strip() if hasattr(self, "txt_ntfy_topic") else "",
+            "ntfy_video_delivery": self.cmb_ntfy_video_delivery.currentData(),
+            "ntfy_google_drive_folder_url": self.txt_ntfy_drive_folder.text().strip(),
             "send_video_to_phone": self.sw_send_video.isChecked() if hasattr(self, "sw_send_video") else False,
             "phone_notify_video": self.sw_send_video.isChecked() if hasattr(self, "sw_send_video") else False,
             "telegram_enabled": self.sw_telegram_enabled.isChecked() if hasattr(self, "sw_telegram_enabled") else False,
@@ -2505,6 +2522,8 @@ class SettingsDialog(QDialog):
             "notify_motion": self.sw_notify_motion.isChecked() if hasattr(self, "sw_notify_motion") else False,
             "ntfy_enabled": self.sw_ntfy_enabled.isChecked() if hasattr(self, "sw_ntfy_enabled") else False,
             "ntfy_topic": self.txt_ntfy_topic.text().strip() if hasattr(self, "txt_ntfy_topic") else "",
+            "ntfy_video_delivery": self.cmb_ntfy_video_delivery.currentData(),
+            "ntfy_google_drive_folder_url": self.txt_ntfy_drive_folder.text().strip(),
             "send_video_to_phone": self.sw_send_video.isChecked() if hasattr(self, "sw_send_video") else False,
             "telegram_enabled": self.sw_telegram_enabled.isChecked() if hasattr(self, "sw_telegram_enabled") else False,
             "telegram_token": self.txt_tg_token.text().strip() if hasattr(self, "txt_tg_token") else "",

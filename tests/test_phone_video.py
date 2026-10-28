@@ -36,3 +36,19 @@ class PhoneVideoTests(unittest.TestCase):
             self.assertEqual(audio["codec_name"], "aac")
             subprocess.run(["ffmpeg", "-v", "error", "-i", str(output), "-f", "null", "-"],
                            check=True, timeout=20, **options)
+
+    def test_long_noisy_clip_fits_under_one_mb_without_audio(self):
+        options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / "long.mp4"
+            subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i",
+                            "testsrc2=size=640x360:rate=12", "-t", "61", "-c:v", "libx264",
+                            "-preset", "ultrafast", str(source)], check=True, timeout=40, **options)
+            preview = prepare_phone_video(source)
+            self.assertLessEqual(len(preview), 850_000)
+            output = Path(temp) / "preview.mp4"; output.write_bytes(preview)
+            probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                                    "-of", "json", str(output)], capture_output=True, check=True, timeout=10, **options)
+            self.assertLessEqual(float(json.loads(probe.stdout)["format"]["duration"]), 60.2)
+            subprocess.run(["ffmpeg", "-v", "error", "-i", str(output), "-f", "null", "-"],
+                           check=True, timeout=20, **options)

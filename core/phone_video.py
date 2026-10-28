@@ -5,11 +5,11 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-MAX_PREVIEW_BYTES = 1_800_000
+MAX_PREVIEW_BYTES = 850_000
 
 
 def prepare_phone_video(path):
-    """Keep the source untouched; return a complete MP4 preview under 2 MB."""
+    """Keep the source untouched; return a complete MP4 preview under 1 MB."""
     options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
     probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
                             "-of", "json", str(path)], capture_output=True, timeout=15,
