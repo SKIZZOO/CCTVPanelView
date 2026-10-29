@@ -23,6 +23,7 @@ from core.notification_policy import allows_notification
 from core.network_tls import verified_tls_context
 from core.phone_video import prepare_phone_video
 from core.drive_folder import stage_drive_recording
+from core.notification_media import attachment_name
 
 _phone_video_slots = threading.BoundedSemaphore(1)
 
@@ -241,7 +242,7 @@ class NotificationDispatcher:
         # 1. ntfy.sh Mobile Push
         if self.ntfy_enabled and self.ntfy_topic:
             try:
-                snap_fn = os.path.basename(snap_path) if snap_path else ""
+                snap_fn = attachment_name(cam_name, label, alert_entry.get("timestamp"), snapshot=True)
                 self._send_ntfy(cam_name, label, conf, desc, time_str, trigger_reason, snap_bytes, snap_filename=snap_fn)
             except Exception as e:
                 print("[Notifier] ntfy push error: " + self.ntfy_error_message(e))
@@ -309,7 +310,8 @@ class NotificationDispatcher:
                             return
                         preview = prepare_phone_video(video_path)
                     if self.is_phone_enabled and self.notify_video_enabled and self.should_notify_label(label, alert_entry):
-                        self._send_ntfy_video(cam_name, label, conf, desc, time_str, preview, "incident-preview.mp4")
+                        self._send_ntfy_video(cam_name, label, conf, desc, time_str, preview,
+                                              attachment_name(cam_name, label, alert_entry.get("timestamp")))
             except Exception as e:
                 print("[Notifier] ntfy video push error: " + self.ntfy_error_message(e))
                 try:
@@ -408,11 +410,12 @@ class NotificationDispatcher:
     def _send_ntfy(self, cam_name, label, conf, desc, time_str, trigger_reason, snap_bytes, snap_filename=""):
         """Publish directly to ntfy; cloud-sync files are not a delivery dependency."""
         conf_str = f" ({int(conf * 100)}%)" if conf > 0 else ""
-        title = f"[ALERT] {cam_name.split(' (')[0].strip()}: {label.title()}{conf_str}"
-        message = desc or f"{label.title()} detected at {time_str}"
+        title = f"{label.title()} detected | {cam_name.split(' (')[0].strip()}"
+        message = f"{desc or label.title() + ' detected'}\n{time_str}{conf_str}"
         priority = "urgent" if "PERSON" in label.upper() else "high"
         try:
-            self._publish_ntfy(title, message, "warning,camera", snap_bytes, "snapshot.jpg", priority=priority)
+            self._publish_ntfy(title, message, "camera", snap_bytes,
+                               snap_filename or attachment_name(cam_name, label, snapshot=True), priority=priority)
         except urllib.error.HTTPError as error:
             if error.code != 413 or not snap_bytes:
                 raise
@@ -505,17 +508,16 @@ class NotificationDispatcher:
     def _send_ntfy_video(self, cam_name, label, conf, desc, time_str, video_bytes, filename):
         """Send a clip attachment, falling back to an honest text alert on HTTP 413."""
         conf_str = f" ({int(conf * 100)}%)" if conf > 0 else ""
-        title = f"[Video Clip] {cam_name.split(' (')[0].strip()} - {label.title()}{conf_str}"
-        message = desc or f"{label.title()} incident clip recorded at {time_str}"
+        title = f"{label.title()} video | {cam_name.split(' (')[0].strip()}"
+        message = f"{desc or label.title() + ' recorded'}\n{time_str}{conf_str}"
         try:
             # One native attachment preserves ntfy's MIME/size/expiry metadata
             # and lets iOS download, retain and open it with Quick Look.
             if not video_bytes:
                 raise ValueError("Video preview is empty.")
             return self._publish_ntfy(
-                title, message + " — Tap the MP4 attachment to download, then tap again to play. "
-                "Download promptly: ntfy normally removes server copies after 3 hours. Full recording is on your PC.",
-                "movie_camera,warning", video_bytes, "incident-preview.mp4", timeout=30, priority="high")
+                title, message + "\nTap to download, then tap again to play. Available for 3 hours on ntfy.sh; full recording saved on PC.",
+                "movie_camera", video_bytes, filename, timeout=30, priority="high")
         except urllib.error.HTTPError as error:
             if error.code != 413:
                 raise

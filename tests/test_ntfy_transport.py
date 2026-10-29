@@ -35,7 +35,7 @@ class NtfyTransportTests(unittest.TestCase):
         self.assertEqual([photo.get_method(), clip.get_method()], ["PUT", "PUT"])
         self.assertEqual([photo.data, clip.data], [b"jpeg", b"mp4"])
         self.assertEqual(photo.get_header("Priority"), "urgent")
-        self.assertEqual(clip.get_header("Filename"), "incident-preview.mp4")
+        self.assertEqual(clip.get_header("Filename"), "clip.mp4")
         self.assertIsNone(clip.get_header("Actions"))
         self.assertIsNone(clip.get_header("Click"))
         self.assertEqual(clip.get_header("Content-type"), "video/mp4")
@@ -54,7 +54,7 @@ class NtfyTransportTests(unittest.TestCase):
         self.assertEqual(accepted["attachment"], metadata["attachment"])
         actual = request.call_args.args[0]
         self.assertEqual(actual.get_method(), "PUT")
-        self.assertEqual(actual.get_header("Filename"), "incident-preview.mp4")
+        self.assertEqual(actual.get_header("Filename"), "clip.mp4")
         self.assertEqual(actual.get_header("Content-type"), "video/mp4")
         self.assertIsNone(actual.get_header("Click"))
         self.assertIsNone(actual.get_header("Attach"))
@@ -74,12 +74,12 @@ class NtfyTransportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             clip = Path(temp) / "clip.mp4"
             with clip.open("wb") as stream: stream.truncate(20 * 1024 * 1024)
-            entry = {"label": "PERSON", "video_path": str(clip)}
+            entry = {"label": "PERSON", "camera_name": "Front Gate", "timestamp": "2026-10-29 09:04:48", "video_path": str(clip)}
             with patch("core.notification_dispatcher.prepare_phone_video", return_value=b"preview") as prepare, \
                  patch.object(self.dispatcher, "_send_ntfy_video") as send:
                 self.dispatcher._dispatch_video_worker(entry)
             prepare.assert_called_once_with(str(clip))
-            self.assertEqual(send.call_args.args[-2:], (b"preview", "incident-preview.mp4"))
+            self.assertEqual(send.call_args.args[-2:], (b"preview", "Person_Front-Gate_2026-10-29_09-04-48_Preview.mp4"))
             self.assertEqual(clip.stat().st_size, 20 * 1024 * 1024)
 
     def test_missing_snapshot_is_sent_as_utf8_text_with_safe_headers(self):
@@ -87,7 +87,7 @@ class NtfyTransportTests(unittest.TestCase):
             self.dispatcher._send_ntfy("Camera\r\nInjected", "PERSON", .9, "PersoanÄƒ lÃ¢ngÄƒ poartÄƒ", "12:00", "", None)
         actual = request.call_args.args[0]
         self.assertEqual(actual.get_method(), "POST")
-        self.assertEqual(actual.data.decode("utf-8"), "PersoanÄƒ lÃ¢ngÄƒ poartÄƒ")
+        self.assertEqual(actual.data.decode("utf-8"), "PersoanÄƒ lÃ¢ngÄƒ poartÄƒ\n12:00 (90%)")
         self.assertNotIn("\n", actual.get_header("Title"))
         self.assertIsNone(actual.get_header("Filename"))
 

@@ -8,7 +8,7 @@
 
 A desktop viewer for RTSP/ONVIF IP cameras, with motion alerts, optional on-device object detection, local recording, and a browser interface for phones and tablets.
 
-[**Download for Windows**](https://github.com/SKIZZOO/CCTVPanelView/releases/latest) Â· [Features](#what-you-can-do) Â· [Quick start](#install-the-windows-release) Â· [Security](#security-and-privacy) Â· [2.3.5 update prompts and clean settings text](docs/RELEASE-2.3.5.md)
+[**Download for Windows**](https://github.com/SKIZZOO/CCTVPanelView/releases/latest) Â· [Features](#what-you-can-do) Â· [Quick start](#install-the-windows-release) Â· [Security](#security-and-privacy) Â· [2.3.6 readable phone attachments](docs/RELEASE-2.3.6.md)
 
 ![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4)
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776ab)
