@@ -8,6 +8,10 @@
 
 A desktop viewer for RTSP/ONVIF IP cameras, with motion alerts, optional on-device object detection, local recording, and a browser interface for phones and tablets.
 
+**Enjoying CCTVPanelView?** [♥ Support the project on Ko-fi](https://ko-fi.com/skidesign)
+
+Your support helps fund continued development, improvements and bug fixes. Thank you!
+
 [**Download for Windows**](https://github.com/SKIZZOO/CCTVPanelView/releases/latest) Â· [Features](#what-you-can-do) Â· [Quick start](#install-the-windows-release) Â· [Security](#security-and-privacy) Â· [2.3.6 readable phone attachments](docs/RELEASE-2.3.6.md)
 
 ![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4)
@@ -246,3 +250,11 @@ Windows shortcuts use the executable's embedded icon and the same app identity a
 ## Available updates at the top of the app
 
 When a background check finds a newer stable release, a banner appears below the top toolbar. While CCTVPanelView is active, a prompt offers **Update now** or **Not now** once per new version each session. Update now opens the verified download flow; installation still requires **Install and restart**. Not now keeps the banner available through **Review update** and does not download or install anything. Hidden/minimized/background windows wait until the app is active before prompting. Checks remain optional under Settings.
+
+## Support the project
+
+CCTVPanelView is free and open source. If it helps you keep an eye on your cameras, you can support its development with a contribution on Ko-fi.
+
+### [♥ Support CCTVPanelView on Ko-fi](https://ko-fi.com/skidesign)
+
+Contributions are optional and appreciated. You can also help by reporting bugs, sharing feedback or contributing improvements on GitHub.
